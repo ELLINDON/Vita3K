@@ -995,6 +995,11 @@ void VKState::late_init(const Config &cfg, const std::string_view game_id, MemSt
     if (const char *v = std::getenv("VITA3K_DEPTH_STORE_SCENES"); v && (v[0] == '0' || v[0] == '1'))
         features.depth_store_scenes = v[0] == '1';
     LOG_INFO_IF(features.depth_store_scenes, "Depth: scenes that don't store their depth-stencil surface leave it unchanged");
+    pipeline_cache.pipeline_wait_ms = cfg.pipeline_wait_ms;
+    // VITA3K_PIPELINE_WAIT_MS=<ms> overrides the game's choice (debugging aid)
+    if (const char *v = std::getenv("VITA3K_PIPELINE_WAIT_MS"); v && *v)
+        pipeline_cache.pipeline_wait_ms = std::atoi(v);
+    LOG_INFO_IF(pipeline_cache.pipeline_wait_ms > 0, "Pipelines: a draw waits up to {} ms for one still compiling", pipeline_cache.pipeline_wait_ms);
     LOG_INFO_IF(!features.support_depth_clamp, "The GPU has no depth clamp: depth is clamped per vertex (triangles crossing the near plane can show wrong colours)");
 
 #ifdef __ANDROID__

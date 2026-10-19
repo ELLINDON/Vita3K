@@ -25,6 +25,7 @@
 
 #include <config/state.h>
 #include <display/state.h>
+#include <chrono>
 #include <functional>
 #include <overlay/display_manager.h>
 #include <overlay/shader_precompile_progress.h>
@@ -199,6 +200,9 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
         const int total = static_cast<int>(state.precompile_queue.size());
         state.precompile_total = total;
 
+        // the progress is drawn every 50 ms, not after each shader: each swap waits for the display's
+        // refresh, which made 562 shaders take 9.3 s to load instead of 0.23 s
+        auto last_drawn = std::chrono::steady_clock::now();
         for (int i = 0; i < total && !state.render_abort.load(std::memory_order_relaxed); ++i) {
             if (!state.set_current())
                 break;
@@ -206,7 +210,9 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
             state.precompile_shader(state.precompile_queue[i]);
             state.precompile_progress = i + 1;
 
-            if (progress_overlay) {
+            const auto now = std::chrono::steady_clock::now();
+            if (progress_overlay && (now - last_drawn >= std::chrono::milliseconds(50) || i + 1 == total)) {
+                last_drawn = now;
                 progress_overlay->set_progress(i + 1, total);
                 state.render_frame(display, gxm, mem);
                 state.swap_window();

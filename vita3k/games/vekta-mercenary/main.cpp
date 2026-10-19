@@ -92,6 +92,9 @@ int main(int argc, char *argv[]) {
         // its particle scene loads the quarter-resolution depth, draws into it and doesn't store it; on the
         // hardware the depth of field after it reads the depth stored before, not those writes (blur sweeps)
         cfg.depth_store_scenes = true;
+        // a draw whose pipeline is still compiling waits for it rather than being skipped: objects
+        // flickered the first time they were drawn (on a first play only, before the pipeline cache knew them)
+        cfg.pipeline_wait_ms = 30;
         // a PS TV: pads on the external ports, the PS TV model (SceCtrl, SceSysmem)
         cfg.pstv_mode = ctx.settings->values.get_bool("controls.pstv_mode");
     };

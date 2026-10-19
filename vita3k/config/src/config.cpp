@@ -173,6 +173,7 @@ static void check_members(Config &self, const Config &rhs) {
     self.clamp_color_varyings = rhs.clamp_color_varyings;
     self.zero_init_registers = rhs.zero_init_registers;
     self.depth_store_scenes = rhs.depth_store_scenes;
+    self.pipeline_wait_ms = rhs.pipeline_wait_ms;
     self.app_args = rhs.app_args;
     self.load_app_list = rhs.load_app_list;
     self.self_path = rhs.self_path;

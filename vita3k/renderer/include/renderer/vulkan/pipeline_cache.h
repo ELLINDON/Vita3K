@@ -22,8 +22,11 @@
 #include <vkutil/vkutil.h>
 
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <vector>
@@ -104,6 +107,14 @@ private:
 
     vk::Pipeline compile_pipeline(SceGxmPrimitiveType type, vk::RenderPass render_pass, const SceGxmVertexProgram &vertex_program_gxm, const SceGxmFragmentProgram &fragment_program_gxm, const GxmRecordState &record, const shader::Hints &hints, MemState &mem);
 
+    // pipeline_wait_ms: what is left of the budget, and when it was last refilled
+    double wait_budget_ms = 0.0;
+    std::chrono::steady_clock::time_point wait_budget_time{};
+    // signalled by the compile threads each time a pipeline is done
+    std::mutex compiled_mutex;
+    std::condition_variable compiled;
+    vk::Pipeline wait_for_pipeline(vk::Pipeline &slot);
+
 public:
     // if not 0, next time the pipeline cache should be saved (in seconds since epoch)
     uint64_t next_pipeline_cache_save = std::numeric_limits<uint64_t>::max();
@@ -111,6 +122,10 @@ public:
     // modified by the surface cache, estimates if it is safe to use async pipeline compilation
     // (i.e that it does not causes permanent graphical issues)
     bool can_use_deferred_compilation;
+
+    // Config::pipeline_wait_ms: a draw whose pipeline is still being compiled in the background waits up to
+    // this long for it (0: it is skipped, which shows as a flicker the first time an object is drawn)
+    int pipeline_wait_ms = 0;
 
     vk::DescriptorSetLayout uniforms_layout;
     // used for the mask, color attachment

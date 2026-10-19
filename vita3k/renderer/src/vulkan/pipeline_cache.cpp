@@ -32,6 +32,12 @@
 
 #include <SDL3/SDL_cpuinfo.h>
 
+#include <algorithm>
+#include <atomic>
+#include <bit>
+#include <chrono>
+#include <thread>
+
 // don't use the dispatch version, because we always hash a small amount
 // with a known size
 #define XXH_INLINE_ALL
@@ -829,7 +835,12 @@ void PipelineCache::compiler_thread(MemState &mem) {
             break;
 
         vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
-        *request->pipeline = pipeline;
+        // the render thread may be waiting for it (wait_for_pipeline)
+        {
+            std::lock_guard<std::mutex> lock(compiled_mutex);
+            std::atomic_ref<uint64_t>(*reinterpret_cast<uint64_t *>(request->pipeline)).store(std::bit_cast<uint64_t>(pipeline), std::memory_order_release);
+        }
+        compiled.notify_all();
 
         request->vertex_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
         request->fragment_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
@@ -996,7 +1007,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         if (it->second != nullptr) {
             if (it->second == pipeline_compiling)
                 // pipeline is still compiling
-                return nullptr;
+                return pipeline_wait_ms > 0 ? wait_for_pipeline(it->second) : nullptr;
             else
                 return it->second;
         }
@@ -1037,7 +1048,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
 
         pipeline_compile_queue.enqueue(pipeline_compile_queue_token, request);
 
-        return nullptr;
+        return pipeline_wait_ms > 0 ? wait_for_pipeline(it->second) : nullptr;
     } else {
         // can't wait, compile it right now
         vk::Pipeline result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);
@@ -1052,6 +1063,33 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
 
         return result;
     }
+}
+
+// Most pipelines compile in a few milliseconds (90% in under 10 ms on a Radeon 760M), so waiting for one
+// keeps the draw a skip would lose. The budget refills at a quarter of the time that passes, up
+// to pipeline_wait_ms: a single new pipeline waits for as long as it takes (up to that), while a burst
+// of them, as when a level loads, can't take more than a quarter of the time; past that, draws are
+// skipped as before.
+vk::Pipeline PipelineCache::wait_for_pipeline(vk::Pipeline &slot) {
+    constexpr uint64_t compiling = ~0ULL;
+    std::atomic_ref<uint64_t> value(*reinterpret_cast<uint64_t *>(&slot));
+    const auto start = std::chrono::steady_clock::now();
+    const double refill = 0.25 * std::chrono::duration<double, std::milli>(start - wait_budget_time).count();
+    wait_budget_ms = std::min(static_cast<double>(pipeline_wait_ms), wait_budget_ms + refill);
+    const auto deadline = start + std::chrono::duration<double, std::milli>(wait_budget_ms);
+
+    uint64_t pipeline;
+    {
+        std::unique_lock<std::mutex> lock(compiled_mutex);
+        compiled.wait_until(lock, deadline, [&] {
+            pipeline = value.load(std::memory_order_acquire);
+            return pipeline != compiling;
+        });
+    }
+    const auto now = std::chrono::steady_clock::now();
+    wait_budget_ms = std::max(0.0, wait_budget_ms - std::chrono::duration<double, std::milli>(now - start).count());
+    wait_budget_time = now;
+    return pipeline == compiling ? nullptr : std::bit_cast<vk::Pipeline>(pipeline);
 }
 
 vk::ShaderModule PipelineCache::precompile_shader(const Sha256Hash &hash, bool search_first) {

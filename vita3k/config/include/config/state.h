@@ -77,6 +77,10 @@ struct Config {
     // on the hardware, where only a store writes it to memory (FeatureState::depth_store_scenes); set by a
     // game's front end, not saved in config.yml
     bool depth_store_scenes = false;
+    // pipelines: a draw whose pipeline is still being compiled in the background waits up to this many
+    // milliseconds for it instead of being skipped, from a budget that refills at a quarter of the time
+    // that passes (PipelineCache::pipeline_wait_ms); set by a game's front end, not saved in config.yml
+    int pipeline_wait_ms = 0;
 
     fs::path get_vita_fs_path() const {
         return fs_utils::utf8_to_path(vita_fs_path);

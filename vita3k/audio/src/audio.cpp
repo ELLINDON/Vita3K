@@ -23,7 +23,49 @@
 #include <util/log.h>
 
 #include <cassert>
+#include <chrono>
+#include <cstdint>
 #include <cstring>
+#include <thread>
+
+namespace {
+
+// used when the host has no audio device (none plugged in, or no default one): the ports take the sound
+// at the pace a device would and drop it, so a game runs silent instead of stopping
+struct SilentAudioOutPort : AudioOutPort {
+    std::chrono::steady_clock::time_point next{};
+};
+
+class SilentAudioAdapter : public AudioAdapter {
+public:
+    explicit SilentAudioAdapter(AudioState &audio_state)
+        : AudioAdapter(audio_state) {}
+
+    bool init() override {
+        return true;
+    }
+
+    AudioOutPortPtr open_port(int nb_channels, int freq, int nb_sample) override {
+        auto port = std::make_shared<SilentAudioOutPort>();
+        port->len_bytes = nb_sample * nb_channels * static_cast<int>(sizeof(int16_t));
+        port->len_microseconds = (nb_sample * 1'000'000ULL) / freq;
+        return port;
+    }
+
+    // one buffer may be ahead of the clock, as in a device's queue; a sleep that overshoots is made up
+    // by the next ones, unless the game fell behind by more than a few buffers (a pause, a loading)
+    void audio_output(AudioOutPort &out_port, const void *buffer) override {
+        auto &port = static_cast<SilentAudioOutPort &>(out_port);
+        const auto len = std::chrono::microseconds(port.len_microseconds);
+        const auto now = std::chrono::steady_clock::now();
+        if (port.next + 4 * len < now)
+            port.next = now;
+        port.next += len;
+        std::this_thread::sleep_until(port.next - len);
+    }
+};
+
+} // namespace
 
 bool AudioState::init(const std::string &adapter_name) {
     set_backend(adapter_name);
@@ -81,7 +123,9 @@ void AudioState::set_backend(const std::string &adapter_name) {
     // lock the mutex to make sure nothing happens until the initialisation is done
     const std::lock_guard<std::mutex> lock(mutex);
     if (!adapter->init()) {
-        adapter.reset();
+        LOG_WARN("No audio device: the game runs without sound");
+        adapter = std::make_unique<SilentAudioAdapter>(*this);
+        adapter->init();
     }
 }
 

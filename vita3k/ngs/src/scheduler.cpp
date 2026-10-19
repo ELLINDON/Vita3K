@@ -18,6 +18,8 @@
 #include <ngs/scheduler.h>
 #include <ngs/system.h>
 
+#include "trace.h"
+
 #include <kernel/state.h>
 
 #include <algorithm>
@@ -148,6 +150,8 @@ void VoiceScheduler::update(KernelState &kern, const MemState &mem, const SceUID
                     finished = true;
                     finished_module = voice->rack->modules[i]->module_id();
                 }
+                if (i == 0 && trace::on())
+                    trace::decoded(voice, voice->rack->system->granularity);
             }
         }
         if (finished) {
@@ -165,6 +169,8 @@ void VoiceScheduler::update(KernelState &kern, const MemState &mem, const SceUID
             stop(mem, voice);
         }
 
+        if (trace::on())
+            trace::delivered(mem, voice, voice->rack->system->granularity);
         for (size_t i = 0; i < voice->rack->vdef->output_count; i++) {
             if (voice->products[i].data)
                 deliver_data(mem, queue_copy, voice, static_cast<uint8_t>(i), voice->products[i]);
@@ -172,6 +178,9 @@ void VoiceScheduler::update(KernelState &kern, const MemState &mem, const SceUID
 
         voice->frame_count++;
     }
+
+    if (trace::on() && !queue_copy.empty())
+        trace::tick_end(queue_copy.front()->rack->system->granularity);
 
     while (!operations_pending.empty()) {
         OperationPending &op = operations_pending.front();

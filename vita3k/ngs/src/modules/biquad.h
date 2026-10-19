@@ -16,9 +16,10 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 // The NGS filter modes as biquads (the filter and equalizer modules). The formulas are the RBJ
-// audio-EQ cookbook's; how closely they match the hardware's is a **hypothesis**. fGain is a level
-// in dB (Killzone Mercenary passes 20 log10 of its linear levels): the boost or cut of the peak and
-// shelf modes, and an output level for the others.
+// audio-EQ cookbook's; how closely they match the hardware's is a **hypothesis**. fGain is in dB
+// (Killzone Mercenary passes 20 log10 of its linear levels) and, as in the cookbook, only shapes the
+// peak and shelf modes. Read as an output level of the other modes, it took 10.5 dB off every line of
+// that game's dialogue (a high-pass band with a gain of -10.46), which players heard as too quiet.
 
 #pragma once
 
@@ -32,7 +33,6 @@ namespace ngs {
 
 struct Biquad {
     float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f; // normalised: y = b0 x + b1 x1 + b2 x2 - a1 y1 - a2 y2
-    float out_gain = 1.0f;
     bool active = false;
 };
 
@@ -55,7 +55,6 @@ inline Biquad biquad_from_params(const SceNgsParamFilter &p, const float sample_
     const float gain_db = std::clamp(p.fGain, -96.0f, 48.0f);
     const float A = std::pow(10.0f, gain_db / 40.0f);
     float b0, b1, b2, a0, a1, a2;
-    bool level = true; // fGain is an output level, not part of the response
     switch (p.eFilterMode) {
     case SCE_NGS_FILTER_LOWPASS_RESONANT:
     case SCE_NGS_FILTER_LOWPASS_RESONANT_NORMALIZED:
@@ -75,20 +74,17 @@ inline Biquad biquad_from_params(const SceNgsParamFilter &p, const float sample_
         break;
     case SCE_NGS_FILTER_PEAK:
         b0 = 1 + alpha * A, b1 = -2 * cw, b2 = 1 - alpha * A, a0 = 1 + alpha / A, a1 = -2 * cw, a2 = 1 - alpha / A;
-        level = false;
         break;
     case SCE_NGS_FILTER_HIGHSHELF: {
         const float s = 2 * std::sqrt(A) * alpha;
         b0 = A * ((A + 1) + (A - 1) * cw + s), b1 = -2 * A * ((A - 1) + (A + 1) * cw), b2 = A * ((A + 1) + (A - 1) * cw - s);
         a0 = (A + 1) - (A - 1) * cw + s, a1 = 2 * ((A - 1) - (A + 1) * cw), a2 = (A + 1) - (A - 1) * cw - s;
-        level = false;
         break;
     }
     case SCE_NGS_FILTER_LOWSHELF: {
         const float s = 2 * std::sqrt(A) * alpha;
         b0 = A * ((A + 1) - (A - 1) * cw + s), b1 = 2 * A * ((A - 1) - (A + 1) * cw), b2 = A * ((A + 1) - (A - 1) * cw - s);
         a0 = (A + 1) + (A - 1) * cw + s, a1 = -2 * ((A - 1) + (A + 1) * cw), a2 = (A + 1) + (A - 1) * cw - s;
-        level = false;
         break;
     }
     case SCE_NGS_FILTER_LOWPASS_ONEPOLE: {
@@ -108,7 +104,6 @@ inline Biquad biquad_from_params(const SceNgsParamFilter &p, const float sample_
         return q;
     }
     q.b0 = b0 / a0, q.b1 = b1 / a0, q.b2 = b2 / a0, q.a1 = a1 / a0, q.a2 = a2 / a0;
-    q.out_gain = level ? A * A : 1.0f;
     q.active = true;
     return q;
 }
@@ -133,7 +128,7 @@ inline void biquad_process(const Biquad &q, BiquadState &st, float *pcm, const i
             if (!std::isfinite(y) || std::fabs(y) < 1e-25f)
                 y = 0.0f;
             x2 = x1, x1 = x, y2 = y1, y1 = y;
-            pcm[2 * n + ch] = y * q.out_gain;
+            pcm[2 * n + ch] = y;
         }
         st.z[ch] = { x1, x2, y1, y2 };
     }

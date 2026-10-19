@@ -340,12 +340,20 @@ struct System : public MempoolObject {
     int32_t sample_rate;
     bool reverb = false; // State::Effects::reverb when the system was created
     bool dsp = false; // State::Effects::dsp when the system was created
+    // State::Effects::mono_full when the system was created. The decoders make mono sound stereo at
+    // -3 dB a side (libswresample's centre mix), and a mono rack's patches take the left side only,
+    // so a mono voice reached the mix 3 dB below the level the game set. On, mono_gain() puts it back.
+    bool mono_full = false;
 
     VoiceScheduler voice_scheduler;
 
     explicit System(const Ptr<void> memspace, const uint32_t memspace_size);
     static uint32_t get_required_memspace_size(SceNgsSystemInitParams *parameters);
 };
+
+// the gain a source module gives `frames` frames it decoded from `channels` channels: sqrt(2) for mono
+// data in a mono rack with System::mono_full, 1 otherwise
+void apply_mono_gain(const Voice &voice, int channels, float *pcm, int32_t frames);
 
 bool deliver_data(const MemState &mem, const std::vector<Voice *> &voice_queue, Voice *source, const uint8_t output_port,
     const VoiceProduct &data_to_deliver);

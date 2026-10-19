@@ -98,6 +98,7 @@ int main(int argc, char *argv[]) {
     profile.hooks.before_run = [](game_frontend::Context &ctx) {
         const bool effects = ctx.settings->values.get_bool("audio.effects");
         ctx.emuenv->ngs.effects.dsp = effects;
+        ctx.emuenv->ngs.effects.mono_full = true; // not an effect: the level the game set
         LOG_INFO("audio effects (filters, equalizer, compressor, distortion): {}", effects ? "on" : "off");
     };
     return game_frontend::run(profile, argc, argv);

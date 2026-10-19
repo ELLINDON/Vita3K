@@ -21,6 +21,8 @@
 #include <ngs/modules/atrac9.h>
 #include <ngs/state.h>
 #include <ngs/system.h>
+
+#include "trace.h"
 #include <util/lock_and_find.h>
 
 #include <util/vector_utils.h>
@@ -35,6 +37,14 @@ System::System(const Ptr<void> memspace, const uint32_t memspace_size)
     , max_voices(0)
     , granularity(0)
     , sample_rate(0) {}
+
+void apply_mono_gain(const Voice &voice, const int channels, float *pcm, const int32_t frames) {
+    if (!pcm || channels != 1 || voice.rack->channels_per_voice != 1 || !voice.rack->system->mono_full)
+        return;
+    constexpr float SQRT2 = 1.41421356f;
+    for (int32_t k = 0; k < frames * 2; k++)
+        pcm[k] *= SQRT2;
+}
 
 bool Patch::is_active() const {
     return output_sub_index != -1;
@@ -379,6 +389,7 @@ bool init_system(State &ngs, const MemState &mem, SceNgsSystemInitParams *parame
     sys->sample_rate = parameters->sample_rate;
     sys->reverb = ngs.effects.reverb;
     sys->dsp = ngs.effects.dsp;
+    sys->mono_full = ngs.effects.mono_full;
 
     // Alloc first block for System struct
     if (!sys->alloc_raw(sizeof(System))) {
@@ -429,6 +440,8 @@ bool init_rack(State &ngs, const MemState &mem, System *system, SceNgsBufferInfo
     // Alloc spaces for voice
     rack->voices.resize(description->voice_count);
     rack->vdef = description->definition.get(mem);
+    if (trace::on() && rack->vdef)
+        trace::rack_created(rack, static_cast<int>(rack->vdef->type), rack->channels_per_voice, static_cast<int>(description->voice_count));
 
     for (auto &voice : rack->voices) {
         voice = rack->alloc<Voice>();

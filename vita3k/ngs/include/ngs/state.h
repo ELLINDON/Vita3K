@@ -36,6 +36,7 @@ struct State {
         bool reverb = false; // the reverb buss and its presets (sceNgsModuleGetPreset)
         bool release = false; // sceNgsVoiceKeyOff fades a voice out over its envelope's release time
         bool dsp = false; // the filter, equalizer, compressor and distortion modules
+        bool mono_full = false; // mono voices at full level (see System::mono_full)
     } effects;
 };
 

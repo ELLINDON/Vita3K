@@ -300,6 +300,8 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
         data.parent->products[0].data = data.scratch_data.data();
     }
 
+    apply_mono_gain(*data.parent, params->channels, reinterpret_cast<float *>(data.parent->products[0].data), granularity);
+
     logical->decoded_pcm.consume_frames(samples_to_be_passed);
     state->samples_generated_since_key_on += samples_to_be_passed * params->channels;
     state->samples_generated_total += samples_to_be_passed * params->channels;

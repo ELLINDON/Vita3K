@@ -331,6 +331,10 @@ bool Atrac9Module::process(KernelState &kern, const MemState &mem, const SceUID 
         data.parent->products[0].data = data.scratch_data.data();
     }
 
+    if (runtime->decoder)
+        apply_mono_gain(*data.parent, static_cast<int>(runtime->decoder->get(DecoderQuery::CHANNELS)),
+            reinterpret_cast<float *>(data.parent->products[0].data), static_cast<int32_t>(granularity));
+
     logical->decoded_pcm.consume_frames(samples_to_be_passed);
 
     return is_finished;

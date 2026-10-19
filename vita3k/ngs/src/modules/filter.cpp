@@ -20,6 +20,9 @@
 #include <ngs/modules/filter.h>
 #include <util/log.h>
 
+#include <cstring>
+#include <vector>
+
 namespace ngs {
 
 namespace {
@@ -49,11 +52,26 @@ void FilterModule::set_default_preset(const MemState &mem, ModuleData &data) {
 }
 
 bool FilterModule::process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) {
+    Voice *const voice = data.parent;
+    const System *const system = voice->rack->system;
+    // The voices that end in two filters (simple and SCREAM ones) have two sends: the first filter
+    // makes output 0 and the second output 1, both from the same signal. The first leaves a copy of
+    // its input in the second's scratch, and the second filters that copy.
+    const auto &modules = voice->rack->modules;
+    const bool send_1 = system->dsp && data.index + 1 < modules.size() && dynamic_cast<FilterModule *>(modules[data.index + 1].get());
+    const bool send_2 = system->dsp && data.index > 0 && dynamic_cast<FilterModule *>(modules[data.index - 1].get());
+    float *pcm = reinterpret_cast<float *>(voice->products[0].data);
+    if (send_1 && pcm && system->granularity > 0) {
+        std::vector<uint8_t> &copy = voice->datas[data.index + 1].scratch_data;
+        copy.resize(static_cast<size_t>(system->granularity) * sizeof(float) * 2);
+        std::memcpy(copy.data(), pcm, copy.size());
+    } else if (send_2) {
+        pcm = data.scratch_data.empty() || !pcm ? nullptr : reinterpret_cast<float *>(data.scratch_data.data());
+    }
+
     if (!data.is_bypassed) {
         const SceNgsParamsDescriptor *desc = data.get_parameters<SceNgsParamsDescriptor>(mem);
         if (desc && (desc->id == SCE_NGS_FILTER_PARAMS_COEFF_STRUCT_ID || desc->id == SCE_NGS_FILTER_PARAMS_STRUCT_ID)) {
-            float *const pcm = reinterpret_cast<float *>(data.parent->products[0].data);
-            const System *const system = data.parent->rack->system;
             if (!system->dsp) {
                 LOG_WARN_ONCE("Game is using unimplemented filter audio module");
             } else if (pcm && system->granularity > 0) {
@@ -66,7 +84,10 @@ bool FilterModule::process(KernelState &kern, const MemState &mem, const SceUID 
     }
 
     // Definitions with filters have 2 outputs
-    data.parent->products[1] = data.parent->products[0];
+    if (send_2 && pcm)
+        voice->products[1].data = reinterpret_cast<uint8_t *>(pcm);
+    else
+        voice->products[1] = voice->products[0];
 
     return false;
 }

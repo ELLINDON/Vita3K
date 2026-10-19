@@ -22,6 +22,7 @@
 
 #include <util/log.h>
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -30,13 +31,23 @@
 
 namespace {
 
-// used when the host has no audio device (none plugged in, or no default one): the ports take the sound
-// at the pace a device would and drop it, so a game runs silent instead of stopping
+// used when the audio backend can't start at all (the SDL backend falls back to SDL's dummy driver before
+// that): the ports take the sound at the pace a device would and drop it, so a game runs silent instead
+// of stopping
 struct SilentAudioOutPort : AudioOutPort {
-    std::chrono::steady_clock::time_point next{};
+    // when the sound given so far would have finished playing
+    std::chrono::steady_clock::time_point end{};
 };
 
 class SilentAudioAdapter : public AudioAdapter {
+    // as the SDL adapter: up to 2048 samples (43 ms at 48 kHz) may wait in a port's queue
+    static constexpr int queue_samples = 2048;
+
+    static std::chrono::microseconds queued(const SilentAudioOutPort &port) {
+        const auto now = std::chrono::steady_clock::now();
+        return port.end > now ? std::chrono::duration_cast<std::chrono::microseconds>(port.end - now) : std::chrono::microseconds(0);
+    }
+
 public:
     explicit SilentAudioAdapter(AudioState &audio_state)
         : AudioAdapter(audio_state) {}
@@ -47,21 +58,24 @@ public:
 
     AudioOutPortPtr open_port(int nb_channels, int freq, int nb_sample) override {
         auto port = std::make_shared<SilentAudioOutPort>();
+        port->freq = freq;
         port->len_bytes = nb_sample * nb_channels * static_cast<int>(sizeof(int16_t));
         port->len_microseconds = (nb_sample * 1'000'000ULL) / freq;
         return port;
     }
 
-    // one buffer may be ahead of the clock, as in a device's queue; a sleep that overshoots is made up
-    // by the next ones, unless the game fell behind by more than a few buffers (a pause, a loading)
+    // the sound is queued and dropped: the call waits only while the queue is full, as a device's would
     void audio_output(AudioOutPort &out_port, const void *buffer) override {
         auto &port = static_cast<SilentAudioOutPort &>(out_port);
-        const auto len = std::chrono::microseconds(port.len_microseconds);
-        const auto now = std::chrono::steady_clock::now();
-        if (port.next + 4 * len < now)
-            port.next = now;
-        port.next += len;
-        std::this_thread::sleep_until(port.next - len);
+        const auto limit = std::chrono::microseconds(queue_samples * 1'000'000LL / port.freq);
+        if (queued(port) > limit)
+            std::this_thread::sleep_until(port.end - limit);
+        port.end = std::max(port.end, std::chrono::steady_clock::now()) + std::chrono::microseconds(port.len_microseconds);
+    }
+
+    int get_rest_sample(AudioOutPort &out_port) override {
+        auto &port = static_cast<SilentAudioOutPort &>(out_port);
+        return static_cast<int>(queued(port).count() * port.freq / 1'000'000);
     }
 };
 
@@ -123,7 +137,7 @@ void AudioState::set_backend(const std::string &adapter_name) {
     // lock the mutex to make sure nothing happens until the initialisation is done
     const std::lock_guard<std::mutex> lock(mutex);
     if (!adapter->init()) {
-        LOG_WARN("No audio device: the game runs without sound");
+        LOG_WARN("No audio output: the game runs without sound");
         adapter = std::make_unique<SilentAudioAdapter>(*this);
         adapter->init();
     }

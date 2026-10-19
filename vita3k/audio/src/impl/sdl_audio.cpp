@@ -19,6 +19,10 @@
 #include "util/log.h"
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_hints.h>
+#include <SDL3/SDL_init.h>
+
+#include <cstdlib>
+#include <string_view>
 
 #define SDL_CHECK_EXT(condition, ret)                         \
     do {                                                      \
@@ -60,7 +64,21 @@ bool SDLAudioAdapter::init() {
     // Request smaller device buffer for lower latency callbacks.
     // 512 sample frames = 2048 bytes for stereo 16-bit, matching cubeb's callback size.
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "512");
-    device_id = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr);
+    // VITA3K_AUDIO_SILENT=1 behaves as if there were no device (debugging aid)
+    const char *const silent = std::getenv("VITA3K_AUDIO_SILENT");
+    if (!(silent && silent[0] == '1'))
+        device_id = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr);
+    const char *const driver = SDL_GetCurrentAudioDriver();
+    if (device_id == 0 && driver && std::string_view(driver) != "dummy") {
+        // no device (none plugged in, or an RDP session reconnecting): SDL's dummy driver takes the
+        // sound at a device's pace and drops it, so the game runs silent instead of stopping
+        const char *const error = SDL_GetError();
+        LOG_WARN("No audio device{}: the game runs without sound", error && *error ? fmt::format(" ({})", error) : "");
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO))
+            device_id = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr);
+    }
     SDL_CHECK_EXT(device_id > 0, false);
     return true;
 }

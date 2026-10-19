@@ -160,6 +160,13 @@ struct DepthStencilSurfaceCacheInfo : public SurfaceCacheInfo {
     bool sampled_as_texture = false;
     // the surface as it was when a scene that doesn't store it began (FeatureState::depth_store_scenes)
     std::unique_ptr<vkutil::Image> scene_backup;
+
+    // at a resolution scale other than 1, a stencil kept in guest memory goes between the memory and the scaled image
+    // through an R8_UINT image of the memory's size, one of the scaled size (nearest blits between the two) and a buffer
+    // of the scaled bytes: blits can't write a depth-stencil image
+    vkutil::Image stencil_native;
+    vkutil::Image stencil_scaled;
+    vkutil::Buffer stencil_staging;
 };
 
 // result when looking in the surface cache for a texture

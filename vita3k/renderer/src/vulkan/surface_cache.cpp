@@ -171,6 +171,9 @@ void VKSurfaceCache::destroy_surface(DepthStencilSurfaceCacheInfo &info) {
 
     destroy_framebuffers(info.texture.view);
     destroy_queue.add_image(info.texture);
+    destroy_queue.add_image(info.stencil_native);
+    destroy_queue.add_image(info.stencil_scaled);
+    destroy_queue.add_buffer(info.stencil_staging);
 }
 
 VKSurfaceCache::VKSurfaceCache(VKState &state)
@@ -846,15 +849,28 @@ std::optional<TextureLookupResult> VKSurfaceCache::retrieve_color_surface_as_tex
     }
 }
 
-// The guest memory of a linear, single-sampled, stencil-only S8 surface as the GPU sees it (memory mapping, native
-// resolution): the mapped buffer and the offset in it, or nullptr when the stencil stays in the cached image only
+// the size of a depth-stencil surface on its scaled image: its size in memory times the resolution scale
+static vk::Extent2D scaled_extent(const VKState &state, const DepthStencilSurfaceCacheInfo &info) {
+    return { static_cast<uint32_t>(info.memory_width * state.res_multiplier), static_cast<uint32_t>(info.memory_height * state.res_multiplier) };
+}
+
+// The guest memory of a linear, single-sampled, stencil-only S8 surface as the GPU sees it (memory mapping): the mapped
+// buffer and the offset in it, or nullptr when the stencil stays in the cached image only. At a resolution scale other
+// than 1 the copies go through scaled R8_UINT images (load_scaled_stencil, store_scaled_stencil)
 static const MappedMemory *stencil_memory(VKState &state, const DepthStencilSurfaceCacheInfo &info, const SceGxmDepthStencilSurface &surface, vk::DeviceSize &offset) {
     if (!state.features.enable_memory_mapping || surface.depth_data || !surface.stencil_data
         || surface.get_format() != SCE_GXM_DEPTH_STENCIL_FORMAT_S8 || info.tiling != SurfaceTiling::Linear
-        || info.multisample_mode != SCE_GXM_MULTISAMPLE_NONE || state.res_multiplier != 1.0f
-        || info.texture.width != static_cast<uint32_t>(info.memory_width) || info.texture.height != static_cast<uint32_t>(info.memory_height)
+        || info.multisample_mode != SCE_GXM_MULTISAMPLE_NONE || info.memory_width <= 0 || info.memory_height <= 0
         || info.stride_samples < static_cast<uint32_t>(info.memory_width))
         return nullptr;
+    if (state.res_multiplier == 1.0f) {
+        if (info.texture.width != static_cast<uint32_t>(info.memory_width) || info.texture.height != static_cast<uint32_t>(info.memory_height))
+            return nullptr;
+    } else {
+        const vk::Extent2D scaled = scaled_extent(state, info);
+        if (scaled.width == 0 || scaled.height == 0 || info.texture.width < scaled.width || info.texture.height < scaled.height)
+            return nullptr;
+    }
     const Address address = surface.stencil_data.address();
     const auto it = state.mapped_memories.lower_bound(address);
     if (it == state.mapped_memories.end() || address + info.stride_samples * info.memory_height > it->first + it->second.size)
@@ -874,6 +890,100 @@ static vk::BufferImageCopy stencil_memory_region(const DepthStencilSurfaceCacheI
     };
 }
 
+// transfers in the scaled stencil copies follow each other
+static void transfer_barrier(vk::CommandBuffer cmd) {
+    const vk::MemoryBarrier barrier{ .srcAccessMask = vk::AccessFlagBits::eTransferWrite | vk::AccessFlagBits::eTransferRead,
+        .dstAccessMask = vk::AccessFlagBits::eTransferWrite | vk::AccessFlagBits::eTransferRead };
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlags(), barrier, {}, {});
+}
+
+// (re)make the R8_UINT images and the buffer of the scaled stencil copies for the surface's sizes
+static void prepare_scaled_stencil(VKState &state, DepthStencilSurfaceCacheInfo &info) {
+    const vk::Extent2D scaled = scaled_extent(state, info);
+    vkutil::DestroyQueue &destroy_queue = state.frame().destroy_queue;
+    const auto make = [&](vkutil::Image &image, uint32_t width, uint32_t height) {
+        if (image.image && (image.width != width || image.height != height))
+            destroy_queue.add_image(image);
+        if (!image.image) {
+            image = vkutil::Image(width, height, vk::Format::eR8Uint);
+            image.init_image(vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
+        }
+    };
+    make(info.stencil_native, static_cast<uint32_t>(info.memory_width), static_cast<uint32_t>(info.memory_height));
+    make(info.stencil_scaled, scaled.width, scaled.height);
+    const vk::DeviceSize size = static_cast<vk::DeviceSize>(scaled.width) * scaled.height;
+    if (info.stencil_staging.buffer && info.stencil_staging.size != size)
+        destroy_queue.add_buffer(info.stencil_staging);
+    if (!info.stencil_staging.buffer) {
+        info.stencil_staging = vkutil::Buffer(size);
+        info.stencil_staging.init_buffer(vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst);
+    }
+}
+
+static vk::ImageBlit stencil_blit(const vkutil::Image &src, const vkutil::Image &dst) {
+    return vk::ImageBlit{
+        .srcSubresource = vkutil::color_subresource_layer,
+        .srcOffsets = std::array<vk::Offset3D, 2>{ vk::Offset3D{ 0, 0, 0 }, vk::Offset3D{ static_cast<int32_t>(src.width), static_cast<int32_t>(src.height), 1 } },
+        .dstSubresource = vkutil::color_subresource_layer,
+        .dstOffsets = std::array<vk::Offset3D, 2>{ vk::Offset3D{ 0, 0, 0 }, vk::Offset3D{ static_cast<int32_t>(dst.width), static_cast<int32_t>(dst.height), 1 } }
+    };
+}
+
+static vk::BufferImageCopy stencil_bytes_region(uint32_t row_length, uint32_t width, uint32_t height, vk::DeviceSize offset, vk::ImageAspectFlagBits aspect) {
+    return vk::BufferImageCopy{
+        .bufferOffset = offset,
+        .bufferRowLength = row_length,
+        .bufferImageHeight = height,
+        .imageSubresource = { aspect, 0, 0, 1 },
+        .imageOffset = { 0, 0, 0 },
+        .imageExtent = { width, height, 1 }
+    };
+}
+
+// the guest's stencil bytes, scaled up into the stencil of the scaled image: memory -> R8_UINT at the memory's size ->
+// nearest blit to the scaled size -> buffer -> stencil aspect. The caller has made the memory's writes visible to transfers
+static void load_scaled_stencil(VKState &state, vk::CommandBuffer cmd, DepthStencilSurfaceCacheInfo &info, const MappedMemory &memory, vk::DeviceSize offset) {
+    prepare_scaled_stencil(state, info);
+    const vk::Extent2D scaled = scaled_extent(state, info);
+    vkutil::Image &native = info.stencil_native;
+    vkutil::Image &up = info.stencil_scaled;
+    native.transition_to_discard(cmd, vkutil::ImageLayout::TransferDst);
+    cmd.copyBufferToImage(memory.buffer, native.image, vk::ImageLayout::eTransferDstOptimal,
+        stencil_bytes_region(info.stride_samples, native.width, native.height, offset, vk::ImageAspectFlagBits::eColor));
+    native.transition_to(cmd, vkutil::ImageLayout::TransferSrc);
+    up.transition_to_discard(cmd, vkutil::ImageLayout::TransferDst);
+    cmd.blitImage(native.image, vk::ImageLayout::eTransferSrcOptimal, up.image, vk::ImageLayout::eTransferDstOptimal, stencil_blit(native, up), vk::Filter::eNearest);
+    up.transition_to(cmd, vkutil::ImageLayout::TransferSrc);
+    transfer_barrier(cmd);
+    cmd.copyImageToBuffer(up.image, vk::ImageLayout::eTransferSrcOptimal, info.stencil_staging.buffer,
+        stencil_bytes_region(scaled.width, scaled.width, scaled.height, 0, vk::ImageAspectFlagBits::eColor));
+    transfer_barrier(cmd);
+    info.texture.transition_to(cmd, vkutil::ImageLayout::TransferDst, vkutil::ds_subresource_range);
+    cmd.copyBufferToImage(info.stencil_staging.buffer, info.texture.image, vk::ImageLayout::eTransferDstOptimal,
+        stencil_bytes_region(scaled.width, scaled.width, scaled.height, 0, vk::ImageAspectFlagBits::eStencil));
+}
+
+// the reverse: the stencil of the scaled image (in TransferSrcOptimal) scaled down into the guest's memory
+static void store_scaled_stencil(VKState &state, vk::CommandBuffer cmd, DepthStencilSurfaceCacheInfo &info, const MappedMemory &memory, vk::DeviceSize offset) {
+    prepare_scaled_stencil(state, info);
+    const vk::Extent2D scaled = scaled_extent(state, info);
+    vkutil::Image &native = info.stencil_native;
+    vkutil::Image &up = info.stencil_scaled;
+    transfer_barrier(cmd);
+    cmd.copyImageToBuffer(info.texture.image, vk::ImageLayout::eTransferSrcOptimal, info.stencil_staging.buffer,
+        stencil_bytes_region(scaled.width, scaled.width, scaled.height, 0, vk::ImageAspectFlagBits::eStencil));
+    transfer_barrier(cmd);
+    up.transition_to_discard(cmd, vkutil::ImageLayout::TransferDst);
+    cmd.copyBufferToImage(info.stencil_staging.buffer, up.image, vk::ImageLayout::eTransferDstOptimal,
+        stencil_bytes_region(scaled.width, scaled.width, scaled.height, 0, vk::ImageAspectFlagBits::eColor));
+    up.transition_to(cmd, vkutil::ImageLayout::TransferSrc);
+    native.transition_to_discard(cmd, vkutil::ImageLayout::TransferDst);
+    cmd.blitImage(up.image, vk::ImageLayout::eTransferSrcOptimal, native.image, vk::ImageLayout::eTransferDstOptimal, stencil_blit(up, native), vk::Filter::eNearest);
+    native.transition_to(cmd, vkutil::ImageLayout::TransferSrc);
+    cmd.copyImageToBuffer(native.image, vk::ImageLayout::eTransferSrcOptimal, memory.buffer,
+        stencil_bytes_region(info.stride_samples, native.width, native.height, offset, vk::ImageAspectFlagBits::eColor));
+}
+
 // a force-loaded surface whose stencil lives in memory gets it from there (prerender cmd: before the scene, after the
 // previous scenes' shader stores)
 static void load_stencil_from_memory(VKState &state, vk::CommandBuffer cmd, DepthStencilSurfaceCacheInfo &info, const SceGxmDepthStencilSurface &surface) {
@@ -885,8 +995,12 @@ static void load_stencil_from_memory(VKState &state, vk::CommandBuffer cmd, Dept
         .dstAccessMask = vk::AccessFlagBits::eTransferRead };
     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eTransfer,
         vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlags(), written, {}, {});
-    info.texture.transition_to(cmd, vkutil::ImageLayout::TransferDst, vkutil::ds_subresource_range);
-    cmd.copyBufferToImage(memory->buffer, info.texture.image, vk::ImageLayout::eTransferDstOptimal, stencil_memory_region(info, offset));
+    if (state.res_multiplier != 1.0f) {
+        load_scaled_stencil(state, cmd, info, *memory, offset);
+    } else {
+        info.texture.transition_to(cmd, vkutil::ImageLayout::TransferDst, vkutil::ds_subresource_range);
+        cmd.copyBufferToImage(memory->buffer, info.texture.image, vk::ImageLayout::eTransferDstOptimal, stencil_memory_region(info, offset));
+    }
     info.texture.transition_to(cmd, vkutil::ImageLayout::DepthStencilReadOnly, vkutil::ds_subresource_range);
 }
 
@@ -2040,7 +2154,10 @@ void VKSurfaceCache::store_stencil_to_memory(vk::CommandBuffer cmd, const SceGxm
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .image = info->texture.image, .subresourceRange = vkutil::ds_subresource_range };
     cmd.pipelineBarrier(ds_stages, vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlags(), {}, {}, barrier);
-    cmd.copyImageToBuffer(info->texture.image, vk::ImageLayout::eTransferSrcOptimal, memory->buffer, stencil_memory_region(*info, offset));
+    if (state.res_multiplier != 1.0f)
+        store_scaled_stencil(state, cmd, *info, *memory, offset);
+    else
+        cmd.copyImageToBuffer(info->texture.image, vk::ImageLayout::eTransferSrcOptimal, memory->buffer, stencil_memory_region(*info, offset));
     barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
     barrier.dstAccessMask = ds_access;
     barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;

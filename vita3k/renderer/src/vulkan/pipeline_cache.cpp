@@ -629,12 +629,6 @@ vk::RenderPass PipelineCache::retrieve_render_pass(vk::Format format, bool force
         .dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentRead
     };
 
-    if (state.features.support_shader_interlock && no_color) {
-        // we must wait for the previous shaders to be done
-        dependencies[1].dstStageMask = vk::PipelineStageFlagBits::eFragmentShader;
-        dependencies[1].dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite;
-    }
-
     // if an attachment is sampled from, we want it to be done before the next render pass fragment shader
     dependencies[1] = {
         .srcSubpass = VK_SUBPASS_EXTERNAL,
@@ -645,9 +639,25 @@ vk::RenderPass PipelineCache::retrieve_render_pass(vk::Format format, bool force
         .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite
     };
 
+    if (state.features.support_shader_interlock && no_color) {
+        // the shader interlock pass reads and writes the colour surface as a storage image from its fragment
+        // shaders: they must wait for the colour attachment writes and the shader writes of the passes before
+        // (this used to be set before the assignment above, which overwrote it; see also the barrier at the
+        // interlock switch in draw())
+        dependencies[1] = {
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
+            .dstStageMask = vk::PipelineStageFlagBits::eFragmentShader,
+            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eShaderWrite,
+            .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
+        };
+    }
+
     if (state.features.support_shader_interlock && !no_color) {
-        // we must wait for the shader interlock shader to be done
+        // we must wait for the shader interlock shader to be done, its writes before the colour load and writes
         dependencies[1].srcAccessMask |= vk::AccessFlagBits::eShaderWrite;
+        dependencies[1].dstAccessMask |= vk::AccessFlagBits::eColorAttachmentRead;
     }
 
     // self-dependency

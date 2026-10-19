@@ -602,6 +602,16 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
         // restart the render pass to act as a barrier
         context.render_cmd.endRenderPass();
         gpu_trace(context, "end render pass (interlock switch)");
+        // the render pass dependencies alone don't order the shader interlock pass's storage-image reads and
+        // writes against the colour attachment accesses of the pass before or after it on AMD: a glyph's shadow
+        // in Killzone Mercenary's subtitle font came out damaged in 8x8 blocks (dark specks on the subtitles)
+        const vk::MemoryBarrier interlock_barrier{
+            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eShaderWrite,
+            .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eColorAttachmentRead
+                | vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eInputAttachmentRead
+        };
+        context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
+            vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::DependencyFlags(), interlock_barrier, {}, {});
 
         if (fragment_program_gxp.is_frag_color_used()) {
             context.curr_renderpass_info.framebuffer = context.current_shader_interlock_framebuffer;

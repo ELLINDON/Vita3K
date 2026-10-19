@@ -93,8 +93,10 @@ int main(int argc, char *argv[]) {
         // hardware the depth of field after it reads the depth stored before, not those writes (blur sweeps)
         cfg.depth_store_scenes = true;
         // a draw whose pipeline is still compiling waits for it rather than being skipped: objects
-        // flickered the first time they were drawn (on a first play only, before the pipeline cache knew them)
-        cfg.pipeline_wait_ms = 30;
+        // flickered the first time they were drawn (on a first play only, before the pipeline cache knew them).
+        // 250 ms covers a camera cut that brings a dozen new pipelines at once; 30 ms still left level
+        // geometry missing for a frame there
+        cfg.pipeline_wait_ms = 250;
         // a PS TV: pads on the external ports, the PS TV model (SceCtrl, SceSysmem)
         cfg.pstv_mode = ctx.settings->values.get_bool("controls.pstv_mode");
     };

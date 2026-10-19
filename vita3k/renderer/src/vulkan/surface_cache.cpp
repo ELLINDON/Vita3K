@@ -1237,7 +1237,11 @@ std::optional<TextureLookupResult> VKSurfaceCache::retrieve_depth_stencil_as_tex
             .delta_col = delta_col_samples,
             .delta_row = delta_row_samples,
         };
-        read_only.depth_view.init_image(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst);
+        // the attachment usage, never used, gives the copy the source's memory layout: copying a depth-stencil
+        // attachment into an image without it lost a block on AMD (Radeon 760M). Killzone Mercenary's 240x136
+        // quarter-resolution depth came out with x 0-127, y 128-135 at 0, and the soft particles that read it
+        // vanished there: a faint rectangle, bottom left, all game long
+        read_only.depth_view.init_image(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eDepthStencilAttachment);
         // we want a texture view with only the depth or stencil aspect bit
         // TODO: not efficient
         state.device.destroy(read_only.depth_view.view);
@@ -1994,7 +1998,8 @@ bool VKSurfaceCache::backup_scene_depth_stencil(vk::CommandBuffer cmd, const Sce
         return false;
     if (!info->scene_backup || info->scene_backup->width != info->texture.width || info->scene_backup->height != info->texture.height) {
         info->scene_backup = std::make_unique<vkutil::Image>(info->texture.width, info->texture.height, info->texture.format);
-        info->scene_backup->init_image(vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
+        // with the attachment usage as the read-only copies above (a block of the copy was lost on AMD without it)
+        info->scene_backup->init_image(vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eDepthStencilAttachment);
         info->scene_backup->layout = vkutil::ImageLayout::Undefined;
     }
     copy_depth_stencil_image(cmd, info->texture, *info->scene_backup);

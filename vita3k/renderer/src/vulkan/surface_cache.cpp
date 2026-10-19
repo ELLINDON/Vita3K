@@ -1611,6 +1611,15 @@ ColorSurfaceCacheInfo *VKSurfaceCache::perform_surface_sync() {
 
         vkutil::Image &blit_image = *last_written_surface->blit_image;
 
+        // a cache entry keeps its blit image when its address is reused for a surface of another format or size:
+        // an image made for the old one would convert the data. Killzone Mercenary's HDR scene (RGBA16F) kept the
+        // sRGB RGBA8 image of the surface before it at that address, so at a resolution scale above 1 its memory
+        // got 8-bit pixels where the game's post-processing reads 16-bit floats (magenta over the picture)
+        if (blit_image.image
+            && (blit_image.format != last_written_surface->texture.format || blit_image.width != last_written_surface->original_width
+                || blit_image.height != last_written_surface->original_height))
+            state.frame().destroy_queue.add_image(blit_image);
+
         if (!blit_image.image) {
             blit_image.format = last_written_surface->texture.format;
             blit_image.width = last_written_surface->original_width;

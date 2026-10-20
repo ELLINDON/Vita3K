@@ -35,7 +35,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
+#include <future>
+#include <thread>
 #include <vector>
 
 #include <renderer/pvrt-dec.h>
@@ -741,12 +744,16 @@ static int pvrtcDecompress(uint8_t *pCompressedData, Pixel32 *pDecompressedData,
     int i32NumXWords = static_cast<int>(ui32Width / ui32WordWidth);
     int i32NumYWords = static_cast<int>(ui32Height / ui32WordHeight);
 
+    // each row of words writes its own pixels and only reads the compressed data, so large textures are decoded in
+    // bands of rows on several threads (the renderer decodes every PVRTC texture it uploads: Killzone Mercenary streams
+    // millions of texels a second while the player moves, and one thread decoding them dropped the frame rate)
+    const auto decode_rows = [&](int firstY, int endY) {
     // Structs used for decompression
     PVRTCWordIndices indices;
     std::vector<Pixel32> pPixels(ui32WordWidth * ui32WordHeight);
 
     // For each row of words
-    for (int wordY = -1; wordY < i32NumYWords - 1; wordY++) {
+    for (int wordY = firstY; wordY < endY; wordY++) {
         // for each column of words
         for (int wordX = -1; wordX < i32NumXWords - 1; wordX++) {
             indices.P[0] = wrapWordIndex(i32NumXWords, wordX);
@@ -783,6 +790,28 @@ static int pvrtcDecompress(uint8_t *pCompressedData, Pixel32 *pDecompressedData,
 
         } // for each word
     } // for each row of words
+    };
+
+    const int rows = i32NumYWords;
+    const int words = i32NumXWords * i32NumYWords;
+    // VITA3K_PVRTC_THREADS=<n>: decode on at most n threads (1: on the calling thread only, for comparisons)
+    static const int threads = [] {
+        if (const char *v = std::getenv("VITA3K_PVRTC_THREADS"))
+            return std::max(1, std::atoi(v));
+        return std::clamp(static_cast<int>(std::thread::hardware_concurrency()) - 2, 1, 8);
+    }();
+    // below 64x64 words (256x256 texels at 4 bpp) a thread costs more than it saves
+    const int bands = words >= 64 * 64 ? std::min(threads, rows) : 1;
+    if (bands <= 1) {
+        decode_rows(-1, rows - 1);
+    } else {
+        std::vector<std::future<void>> done;
+        for (int b = 1; b < bands; b++)
+            done.push_back(std::async(std::launch::async, decode_rows, -1 + rows * b / bands, -1 + rows * (b + 1) / bands));
+        decode_rows(-1, -1 + rows / bands);
+        for (auto &d : done)
+            d.get();
+    }
 
     // Return the data size
     return ui32Width * ui32Height / static_cast<uint32_t>(ui32WordWidth / 2);

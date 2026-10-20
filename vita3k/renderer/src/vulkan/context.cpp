@@ -15,6 +15,7 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+#include <renderer/frame_stats.h>
 #include <renderer/vulkan/types.h>
 
 #include <renderer/vulkan/functions.h>
@@ -884,8 +885,32 @@ static void renderdoc_frame(uint64_t frame) {
     }
 }
 
+// VITA3K_FRAME_LOG=<file>: per frame, the ms since the previous one, the time this function waited for the GPU to
+// finish an older frame, the time draws waited for pipelines still compiling, and the texture uploads (count, ms)
+static void frame_log(uint64_t frame, double gpu_wait_ms) {
+    static FILE *file = [] {
+        const char *path = std::getenv("VITA3K_FRAME_LOG");
+        FILE *f = path ? std::fopen(path, "w") : nullptr;
+        if (f)
+            std::fputs("frame,ms,gpu_wait_ms,pipeline_wait_ms,uploads,upload_ms\n", f);
+        return f;
+    }();
+    if (!file)
+        return;
+    static auto last = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(now - last).count();
+    last = now;
+    std::fprintf(file, "%llu,%.2f,%.2f,%.2f,%u,%.2f\n", static_cast<unsigned long long>(frame), ms, gpu_wait_ms,
+        renderer::frame_stats::pipeline_wait_us.exchange(0) / 1000.0, renderer::frame_stats::uploads.exchange(0),
+        renderer::frame_stats::upload_us.exchange(0) / 1000.0);
+    if (frame % 30 == 0)
+        std::fflush(file);
+}
+
 void new_frame(VKContext &context) {
     renderdoc_frame(context.frame_timestamp);
+    const auto gpu_wait_start = std::chrono::steady_clock::now();
     if (context.state.features.enable_memory_mapping) {
         FrameDoneRequest request = { context.frame_timestamp };
         context.state.request_queue.push(request);
@@ -913,6 +938,8 @@ void new_frame(VKContext &context) {
             context.new_frame_condv.wait(lock, [&]() {
                 return context.last_frame_waited >= previous_frame_timestamp;
             });
+            lock.unlock();
+            frame_log(context.frame_timestamp, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gpu_wait_start).count());
         } else {
             auto result = device.waitForFences(frame.rendered_fences, VK_TRUE, std::numeric_limits<uint64_t>::max());
             if (result != vk::Result::eSuccess) {

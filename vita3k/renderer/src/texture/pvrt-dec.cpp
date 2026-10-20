@@ -656,6 +656,88 @@ static void pvrtcGetDecompressedPixels(const PVRTCWord &P, const PVRTCWord &Q, c
     }
 }
 
+// The words of a 4bpp texture with what pvrtcGetDecompressedPixels derives from each of them, computed once per word
+// instead of once for each of the four 4x4 blocks that use it
+struct PVRTCWordInfo {
+    uint32_t modulation;
+    uint32_t color;
+    Pixel32 colorA;
+    Pixel32 colorB;
+    Pixel128S expandedA;
+    Pixel128S expandedB;
+};
+
+// pvrtcGetDecompressedPixels for 4bpp, with the same results: the modulation of each pixel is read straight from its
+// word (the reference unpacks all 64 values of the four words and keeps 16), the colours come from the word table
+static void pvrtcGetDecompressedPixels4(const PVRTCWordInfo &P, const PVRTCWordInfo &Q, const PVRTCWordInfo &R, const PVRTCWordInfo &S, Pixel32 *pColorData, uint32_t uiII) {
+    Pixel128S upscaledColorA[16];
+    Pixel128S upscaledColorB[16];
+    interpolateColors(P.colorA, Q.colorA, R.colorA, S.colorA, upscaledColorA, 4);
+    interpolateColors(P.colorB, Q.colorB, R.colorB, S.colorB, upscaledColorB, 4);
+
+    // a hard transition (PVRTC-II) in the north-west word changes the centre 4x4 of the 8x8 the four words cover,
+    // which is exactly the block decoded here
+    const bool hard = uiII && (P.color & (1 << 15)) != 0;
+    Pixel128S paletteSet[4][16];
+    bool paletteBuilt = false;
+
+    for (uint32_t y = 0; y < 4; y++) {
+        for (uint32_t x = 0; x < 4; x++) {
+            // the reference reads its 8x8 modulation table at [x + 2][y + 2], a table filled row-major from the words
+            const uint32_t row = x + 2, col = y + 2;
+            const PVRTCWordInfo &word = row < 4 ? (col < 4 ? P : Q) : (col < 4 ? R : S);
+            const uint32_t raw = (word.modulation >> (((row & 3) * 4 + (col & 3)) * 2)) & 3;
+            int32_t mod;
+            if (word.color & 1) {
+                static constexpr int32_t punchthrough_mode[4] = { 0, 4, 14, 8 };
+                mod = hard ? static_cast<int32_t>(raw) + 30 : punchthrough_mode[raw];
+            } else {
+                static constexpr int32_t standard_mode[4] = { 0, 3, 5, 8 };
+                mod = standard_mode[raw] + (hard ? 20 : 0);
+            }
+
+            bool punchthroughAlpha = false;
+            bool usePalette = false;
+            Pixel128S colorA = upscaledColorA[y * 4 + x];
+            Pixel128S colorB = upscaledColorB[y * 4 + x];
+
+            if (mod >= 30) {
+                usePalette = true;
+                mod -= 30;
+            } else if (mod >= 20) {
+                const PVRTCWordInfo &base = x < 2 ? (y < 2 ? P : Q) : (y < 2 ? R : S);
+                colorA = base.expandedA;
+                colorB = base.expandedB;
+                mod -= 20;
+            } else if (mod > 10) {
+                punchthroughAlpha = true;
+                mod -= 10;
+            }
+
+            Pixel128S result;
+            if (usePalette) {
+                if (!paletteBuilt) {
+                    Pixel128S PA = P.expandedA, PB = P.expandedB, QA = Q.expandedA, QB = Q.expandedB;
+                    Pixel128S RA = R.expandedA, RB = R.expandedB, SA = S.expandedA, SB = S.expandedB;
+                    pvrtcBuildPalette(PA, PB, QA, QB, RA, RB, SA, SB, paletteSet);
+                    paletteBuilt = true;
+                }
+                result = paletteSet[mod][y * 4 + x];
+            } else {
+                result.red = (colorA.red * (8 - mod) + colorB.red * mod) / 8;
+                result.green = (colorA.green * (8 - mod) + colorB.green * mod) / 8;
+                result.blue = (colorA.blue * (8 - mod) + colorB.blue * mod) / 8;
+                result.alpha = punchthroughAlpha ? 0 : (colorA.alpha * (8 - mod) + colorB.alpha * mod) / 8;
+            }
+
+            pColorData[y + x * 4].red = static_cast<uint8_t>(result.red);
+            pColorData[y + x * 4].green = static_cast<uint8_t>(result.green);
+            pColorData[y + x * 4].blue = static_cast<uint8_t>(result.blue);
+            pColorData[y + x * 4].alpha = static_cast<uint8_t>(result.alpha);
+        }
+    }
+}
+
 static uint32_t wrapWordIndex(uint32_t numWords, int word) {
     return ((word + numWords) % numWords);
 }
@@ -744,6 +826,24 @@ static int pvrtcDecompress(uint8_t *pCompressedData, Pixel32 *pDecompressedData,
     int i32NumXWords = static_cast<int>(ui32Width / ui32WordWidth);
     int i32NumYWords = static_cast<int>(ui32Height / ui32WordHeight);
 
+    // 4bpp: the words' derived data, once per word (VITA3K_PVRTC_REFERENCE=1: the reference path, for comparisons)
+    static const bool reference = std::getenv("VITA3K_PVRTC_REFERENCE") != nullptr;
+    std::vector<PVRTCWordInfo> word_info;
+    if (ui8Bpp == 4 && !reference) {
+        word_info.resize(static_cast<size_t>(i32NumXWords) * i32NumYWords);
+        for (size_t i = 0; i < word_info.size(); i++) {
+            PVRTCWordInfo &w = word_info[i];
+            w.modulation = pWordMembers[2 * i];
+            w.color = pWordMembers[2 * i + 1];
+            w.colorA = getColorA(w.color, uiII);
+            w.colorB = getColorB(w.color, uiII);
+            if (uiII)
+                getColorABExpanded(w.color, w.expandedA, w.expandedB, 4);
+            else
+                w.expandedA = w.expandedB = {};
+        }
+    }
+
     // each row of words writes its own pixels and only reads the compressed data, so large textures are decoded in
     // bands of rows on several threads (the renderer decodes every PVRTC texture it uploads: Killzone Mercenary streams
     // millions of texels a second while the player moves, and one thread decoding them dropped the frame rate)
@@ -772,6 +872,13 @@ static int pvrtcDecompress(uint8_t *pCompressedData, Pixel32 *pDecompressedData,
                 TwiddleUV(i32NumXWords, i32NumYWords, indices.R[0], indices.R[1]) * 2,
                 TwiddleUV(i32NumXWords, i32NumYWords, indices.S[0], indices.S[1]) * 2,
             };
+
+            if (!word_info.empty()) {
+                pvrtcGetDecompressedPixels4(word_info[WordOffsets[0] / 2], word_info[WordOffsets[1] / 2], word_info[WordOffsets[2] / 2],
+                    word_info[WordOffsets[3] / 2], pPixels.data(), uiII);
+                mapDecompressedData(pOutData, ui32Width, pPixels.data(), indices, ui8Bpp);
+                continue;
+            }
 
             // Access individual elements to fill out PVRTCWord
             PVRTCWord P, Q, R, S;

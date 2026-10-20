@@ -15,6 +15,7 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+#include <renderer/frame_stats.h>
 #include <renderer/vulkan/pipeline_cache.h>
 
 #include <renderer/vulkan/functions.h>
@@ -1081,6 +1082,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
 // of them, as when a level loads, can't take more than a quarter of the time; past that, draws are
 // skipped as before.
 vk::Pipeline PipelineCache::wait_for_pipeline(vk::Pipeline &slot) {
+    const renderer::frame_stats::Timer timer(renderer::frame_stats::pipeline_wait_us);
     constexpr uint64_t compiling = ~0ULL;
     std::atomic_ref<uint64_t> value(*reinterpret_cast<uint64_t *>(&slot));
     const auto start = std::chrono::steady_clock::now();

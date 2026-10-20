@@ -15,6 +15,7 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+#include <renderer/frame_stats.h>
 #include <renderer/functions.h>
 
 #include <renderer/profile.h>
@@ -332,6 +333,8 @@ bool TextureCache::init(const bool hashless_texture_cache, const fs::path &textu
 
 void TextureCache::upload_texture(const SceGxmTexture &gxm_texture, MemState &mem) {
     R_PROFILE(__func__);
+    const renderer::frame_stats::Timer upload_timer(renderer::frame_stats::upload_us);
+    renderer::frame_stats::uploads++;
 
     bool is_vulkan = (backend == renderer::Backend::Vulkan);
 

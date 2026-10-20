@@ -886,13 +886,14 @@ static void renderdoc_frame(uint64_t frame) {
 }
 
 // VITA3K_FRAME_LOG=<file>: per frame, the ms since the previous one, the time this function waited for the GPU to
-// finish an older frame, the time draws waited for pipelines still compiling, and the texture uploads (count, ms)
+// finish an older frame, the time draws waited for pipelines still compiling, the texture uploads (count, ms) and the
+// time the render thread waited for the GPU to finish scenes later commands depend on
 static void frame_log(uint64_t frame, double gpu_wait_ms) {
     static FILE *file = [] {
         const char *path = std::getenv("VITA3K_FRAME_LOG");
         FILE *f = path ? std::fopen(path, "w") : nullptr;
         if (f)
-            std::fputs("frame,ms,gpu_wait_ms,pipeline_wait_ms,uploads,upload_ms\n", f);
+            std::fputs("frame,ms,gpu_wait_ms,pipeline_wait_ms,uploads,upload_ms,sync_wait_ms\n", f);
         return f;
     }();
     if (!file)
@@ -901,9 +902,9 @@ static void frame_log(uint64_t frame, double gpu_wait_ms) {
     const auto now = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(now - last).count();
     last = now;
-    std::fprintf(file, "%llu,%.2f,%.2f,%.2f,%u,%.2f\n", static_cast<unsigned long long>(frame), ms, gpu_wait_ms,
+    std::fprintf(file, "%llu,%.2f,%.2f,%.2f,%u,%.2f,%.2f\n", static_cast<unsigned long long>(frame), ms, gpu_wait_ms,
         renderer::frame_stats::pipeline_wait_us.exchange(0) / 1000.0, renderer::frame_stats::uploads.exchange(0),
-        renderer::frame_stats::upload_us.exchange(0) / 1000.0);
+        renderer::frame_stats::upload_us.exchange(0) / 1000.0, renderer::frame_stats::sync_wait_us.exchange(0) / 1000.0);
     if (frame % 30 == 0)
         std::fflush(file);
 }

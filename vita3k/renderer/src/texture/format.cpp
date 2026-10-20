@@ -17,15 +17,57 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <list>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 #include <gxm/types.h>
 #include <renderer/functions.h>
 #include <renderer/pvrt-dec.h>
 #include <util/log.h>
 
+#if defined(__x86_64__) && !defined(__APPLE__)
+#include <xxh_x86dispatch.h>
+#else
+#define XXH_INLINE_ALL
+#include <xxhash.h>
+#endif
+
 namespace renderer::texture {
+
+// Decoded PVRTC images by their compressed bytes, most recently used first. Killzone Mercenary moves textures around
+// in memory while it plays (its characters' four 1024x1024 PVRTC-II textures, every second or so): the texture
+// cache, which goes by address, uploads them again as new textures, and decoding them again cost 8-9 ms each, a
+// dropped frame each time. Only large images are kept (64x64 words and more), up to 192 MB.
+namespace {
+struct PvrtcCacheKey {
+    uint64_t hash;
+    uint32_t format, width, height;
+    bool operator==(const PvrtcCacheKey &o) const {
+        return hash == o.hash && format == o.format && width == o.width && height == o.height;
+    }
+};
+struct PvrtcCacheKeyHash {
+    size_t operator()(const PvrtcCacheKey &k) const {
+        return static_cast<size_t>(k.hash ^ (static_cast<uint64_t>(k.width) << 32) ^ k.height ^ (static_cast<uint64_t>(k.format) << 16));
+    }
+};
+struct PvrtcCache {
+    std::mutex mutex;
+    std::list<std::pair<PvrtcCacheKey, std::vector<uint8_t>>> entries;
+    std::unordered_map<PvrtcCacheKey, decltype(entries)::iterator, PvrtcCacheKeyHash> index;
+    size_t bytes = 0;
+    static constexpr size_t max_bytes = 192 * 1024 * 1024;
+};
+PvrtcCache &pvrtc_cache() {
+    static PvrtcCache cache;
+    return cache;
+}
+} // namespace
 
 bool convert_base_texture_format_to_base_color_format(SceGxmTextureBaseFormat format, SceGxmColorBaseFormat &color_format) {
     static const std::map<std::uint32_t, std::uint32_t> TEXTURE_TO_COLOR_FORMAT_MAPPING = {
@@ -155,15 +197,49 @@ uint32_t decompress_compressed_texture(SceGxmTextureBaseFormat fmt, void *dest, 
             static_cast<uint32_t *>(dest), format_id);
         return (((width + 3) / 4) * ((height + 3) / 4) * ((format_id != 1 && format_id != 4 && format_id != 5) ? 16 : 8));
     } else if ((fmt >= SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP) && (fmt <= SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII4BPP)) {
-        pvr::PVRTDecompressPVRTC(data, (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP) || (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII2BPP), width, height,
-            (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII2BPP) || (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII4BPP), static_cast<uint8_t *>(dest));
-
         const bool is_2bpp = (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP) || (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII2BPP);
 
         const uint32_t num_xword = (width + (is_2bpp ? 7 : 3)) / (is_2bpp ? 8 : 4);
         const uint32_t num_yword = (height + 3) / 4;
+        const uint32_t source_size = num_xword * num_yword * 8;
+        const size_t decoded_size = static_cast<size_t>(width) * height * 4;
 
-        return num_xword * num_yword * 8;
+        // VITA3K_PVRTC_NO_CACHE=1: always decode (comparisons)
+        static const bool no_cache = std::getenv("VITA3K_PVRTC_NO_CACHE") != nullptr;
+        const bool cacheable = !no_cache && num_xword * num_yword >= 64 * 64;
+        PvrtcCacheKey key{};
+        if (cacheable) {
+            key = { XXH3_64bits(data, source_size), static_cast<uint32_t>(fmt), width, height };
+            PvrtcCache &cache = pvrtc_cache();
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            const auto it = cache.index.find(key);
+            if (it != cache.index.end()) {
+                cache.entries.splice(cache.entries.begin(), cache.entries, it->second);
+                std::memcpy(dest, it->second->second.data(), decoded_size);
+                return source_size;
+            }
+        }
+
+        pvr::PVRTDecompressPVRTC(data, is_2bpp, width, height,
+            (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII2BPP) || (fmt == SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII4BPP), static_cast<uint8_t *>(dest));
+
+        if (cacheable) {
+            PvrtcCache &cache = pvrtc_cache();
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            if (!cache.index.contains(key)) {
+                const uint8_t *decoded = static_cast<const uint8_t *>(dest);
+                cache.entries.emplace_front(key, std::vector<uint8_t>(decoded, decoded + decoded_size));
+                cache.index[key] = cache.entries.begin();
+                cache.bytes += decoded_size;
+                while (cache.bytes > PvrtcCache::max_bytes && !cache.entries.empty()) {
+                    cache.bytes -= cache.entries.back().second.size();
+                    cache.index.erase(cache.entries.back().first);
+                    cache.entries.pop_back();
+                }
+            }
+        }
+
+        return source_size;
     } else {
         LOG_ERROR("Trying to decompress and unswizzle unknown format {}", log_hex(fmt));
     }

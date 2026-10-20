@@ -28,6 +28,8 @@ namespace renderer::frame_stats {
 inline std::atomic<uint64_t> pipeline_wait_us{ 0 };
 inline std::atomic<uint64_t> upload_us{ 0 };
 inline std::atomic<uint32_t> uploads{ 0 };
+// the render thread waiting for the GPU to finish a scene a later command depends on (WaitSyncObject)
+inline std::atomic<uint64_t> sync_wait_us{ 0 };
 
 // adds the time from its creation to its end to a counter
 struct Timer {

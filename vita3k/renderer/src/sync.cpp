@@ -18,6 +18,7 @@
 #include <chrono>
 #include <future>
 #include <renderer/commands.h>
+#include <renderer/frame_stats.h>
 #include <renderer/driver_functions.h>
 #include <renderer/state.h>
 #include <renderer/types.h>
@@ -58,6 +59,7 @@ COMMAND(handle_wait_sync_object) {
     SceGxmSyncObject *sync = helper.pop<Ptr<SceGxmSyncObject>>().get(mem);
     const uint32_t timestamp = helper.pop<uint32_t>();
 
+    const frame_stats::Timer timer(frame_stats::sync_wait_us);
     renderer::wishlist(sync, timestamp);
 }
 

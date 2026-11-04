@@ -63,6 +63,7 @@ struct GxmState {
     std::function<void(SceGxmProgram &program)> on_program_registered;
 
     Queue<DisplayCallback> display_queue;
+    std::mutex display_queue_add_mutex;
     SceUID display_queue_thread;
     std::thread display_host_thread;
 

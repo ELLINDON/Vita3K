@@ -85,15 +85,21 @@ void set_env(const char *name, const std::string &value) {
 #endif
 }
 
-// SSD_AOT (the fork's list of recompiled modules) from the DLLs in `dir`, unless it is set already
+// SSD_AOT (the fork's list of recompiled modules) from the libraries in `dir` (ssd_aot_*.dll on
+// Windows, .so elsewhere), unless it is set already
 std::string select_recompiled_modules(const fs::path &dir) {
+#ifdef _WIN32
+    constexpr const char *extension = ".dll";
+#else
+    constexpr const char *extension = ".so";
+#endif
     if (const char *const env = std::getenv("SSD_AOT"))
         return env;
     std::string list;
     if (fs::is_directory(dir)) {
         for (const auto &entry : fs::directory_iterator(dir)) {
             const auto name = entry.path().filename().string();
-            if (name.starts_with("ssd_aot_") && entry.path().extension() == ".dll")
+            if (name.starts_with("ssd_aot_") && entry.path().extension() == extension)
                 list += (list.empty() ? "" : ";") + entry.path().string();
         }
     }

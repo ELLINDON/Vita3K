@@ -288,8 +288,13 @@ if(APPLE OR NOT FORCE_BUILD_OPENSSL_MAC)
 endif()
 
 # the single-game executables ship their OpenSSL DLLs: always the pinned prebuilt one on MSVC, never
-# whatever OpenSSL the build machine has (a CI runner's 3.x would be linked but not shipped)
-if(NOT FORCE_BUILD_OPENSSL_MAC AND NOT (MSVC AND VITA3K_GAMES_ONLY))
+# whatever OpenSSL the build machine has (a CI runner's 3.x would be linked but not shipped). On
+# Linux they link the pinned source release statically, as on macOS: the Steam Runtime SDK has
+# OpenSSL 1.1, and the player's system is not asked for any.
+if(VITA3K_GAMES_ONLY AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	set(VITA3K_STATIC_OPENSSL ON)
+endif()
+if(NOT FORCE_BUILD_OPENSSL_MAC AND NOT (MSVC AND VITA3K_GAMES_ONLY) AND NOT VITA3K_STATIC_OPENSSL)
 	find_package(OpenSSL QUIET)
 endif()
 
@@ -312,7 +317,7 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 		endif()
 
 		set(OPENSSL_ROOT_DIR "${CMAKE_BINARY_DIR}/external/openssl/x64" CACHE STRING "Path to OpenSSL root")
-	elseif(APPLE)
+	elseif(APPLE OR VITA3K_STATIC_OPENSSL)
 		message(STATUS "OpenSSL not found.")
 		if(NOT EXISTS "${CMAKE_BINARY_DIR}/external/openssl.tar.gz")
 			message(STATUS "Downloading OpenSSL@4 from source...")
@@ -330,7 +335,13 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 
 		if (NOT EXISTS "${CMAKE_BINARY_DIR}/external/openssl/libssl.a" OR NOT EXISTS "${CMAKE_BINARY_DIR}/external/openssl/libcrypto.a")
 			message(STATUS "Building OpenSSL@4...")
-			if (ARCHITECTURE STREQUAL "x86_64" OR ARCHITECTURE STREQUAL "arm64")
+			if(VITA3K_STATIC_OPENSSL)
+				# static libraries only, position-independent (the executables are PIE)
+				execute_process(COMMAND perl Configure linux-${CMAKE_SYSTEM_PROCESSOR} no-shared no-tests no-docs -fPIC
+					WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl")
+				cmake_host_system_information(RESULT openssl_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+				execute_process(COMMAND make -j${openssl_jobs} build_libs WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl" OUTPUT_QUIET)
+			elseif (ARCHITECTURE STREQUAL "x86_64" OR ARCHITECTURE STREQUAL "arm64")
 				execute_process(COMMAND perl Configure darwin64-${ARCHITECTURE} -mmacosx-version-min=11 WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl")
 				execute_process(COMMAND make -j${CPU_COUNT} WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl" OUTPUT_QUIET)
 			else()

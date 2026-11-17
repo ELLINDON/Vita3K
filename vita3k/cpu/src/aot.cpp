@@ -38,6 +38,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 namespace {
@@ -115,21 +117,31 @@ void load_modules() {
     registry.count_jit_insns = count && *count == '1';
     if (const char *const stats = std::getenv("SSD_AOT_STATS"); stats && *stats)
         std::thread(stats_thread, std::string(stats)).detach();
-#ifdef _WIN32
     const char *const env = std::getenv("SSD_AOT");
     if (!env || !*env)
         return;
+    // ';'-separated on every platform (no ';' in the paths)
     std::stringstream list{ std::string(env) };
     std::string path;
     while (std::getline(list, path, ';')) {
         if (path.empty())
             continue;
+#ifdef _WIN32
         const HMODULE dll = LoadLibraryA(path.c_str());
         if (!dll) {
             LOG_ERROR("AOT: cannot load {} (error {})", path, GetLastError());
             continue;
         }
         const auto init = reinterpret_cast<armrecomp::AotInitFn>(GetProcAddress(dll, ARMRECOMP_AOT_INIT));
+#else
+        // never unloaded, like the DLLs; RTLD_LOCAL keeps each module's symbols to itself
+        void *const dll = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (!dll) {
+            LOG_ERROR("AOT: cannot load {} ({})", path, dlerror());
+            continue;
+        }
+        const auto init = reinterpret_cast<armrecomp::AotInitFn>(dlsym(dll, ARMRECOMP_AOT_INIT));
+#endif
         if (!init) {
             LOG_ERROR("AOT: {} has no {}", path, ARMRECOMP_AOT_INIT);
             continue;
@@ -139,10 +151,6 @@ void load_modules() {
         m->init = init;
         registry.modules.push_back(std::move(m));
     }
-#else
-    if (std::getenv("SSD_AOT"))
-        LOG_ERROR("AOT: recompiled modules are only supported on Windows");
-#endif
 }
 
 // FNV-1a 64 over every function's bytes in guest memory, in table order (aot_abi.h)

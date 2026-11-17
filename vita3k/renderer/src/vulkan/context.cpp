@@ -44,6 +44,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+// dlopen (VITA3K_RENDERDOC_FRAME)
+#include <dlfcn.h>
 #endif
 
 namespace renderer::vulkan {
@@ -814,10 +817,11 @@ void VKContext::check_for_macroblock_change(bool is_draw) {
 // the game's frames n to n+count-1 (one capture; default count 1) into renderdoc/ in the working folder (debugging aid).
 // The minimal part of renderdoc_app.h (MIT, Baldur Karlsson) this needs:
 namespace renderdoc_api {
-typedef void(__cdecl *StartEndFrameCapture)(void *device, void *window);
-typedef void(__cdecl *SetCaptureFilePathTemplate)(const char *path_template);
-typedef int(__cdecl *GetAPI)(int version, void **api);
-typedef void(__cdecl *MaskOverlayBits)(uint32_t and_mask, uint32_t or_mask);
+// (RENDERDOC_CC is __cdecl on Windows, which x64 ignores: one calling convention everywhere)
+typedef void (*StartEndFrameCapture)(void *device, void *window);
+typedef void (*SetCaptureFilePathTemplate)(const char *path_template);
+typedef int (*GetAPI)(int version, void **api);
+typedef void (*MaskOverlayBits)(uint32_t and_mask, uint32_t or_mask);
 // RENDERDOC_API_1_1_2's table: the functions this uses are at these indices
 constexpr int mask_overlay_bits = 8;
 constexpr int set_capture_file_path_template = 11;
@@ -842,11 +846,18 @@ static void renderdoc_frame(uint64_t frame) {
             count = std::max<uint64_t>(1, std::strtoull(comma + 1, nullptr, 10));
 #ifdef _WIN32
         HMODULE module = GetModuleHandleA("renderdoc.dll");
+#else
+        void *module = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
+#endif
         if (!module) {
             LOG_WARN("VITA3K_RENDERDOC_FRAME: RenderDoc is not loaded (set ENABLE_VULKAN_RENDERDOC_CAPTURE=1)");
             return false;
         }
+#ifdef _WIN32
         auto get_api = reinterpret_cast<renderdoc_api::GetAPI>(GetProcAddress(module, "RENDERDOC_GetAPI"));
+#else
+        auto get_api = reinterpret_cast<renderdoc_api::GetAPI>(dlsym(module, "RENDERDOC_GetAPI"));
+#endif
         // eRENDERDOC_API_Version_1_1_2
         if (!get_api || !get_api(10102, reinterpret_cast<void **>(&api)) || !api) {
             LOG_WARN("VITA3K_RENDERDOC_FRAME: no RenderDoc API");
@@ -856,9 +867,6 @@ static void renderdoc_frame(uint64_t frame) {
         // no overlay: it covers the top left of the picture, where screen checks look
         reinterpret_cast<renderdoc_api::MaskOverlayBits>(api[renderdoc_api::mask_overlay_bits])(0, 0);
         return true;
-#else
-        return false;
-#endif
     }();
     if (!wanted)
         return;

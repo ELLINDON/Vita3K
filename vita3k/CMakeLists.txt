@@ -474,21 +474,34 @@ endif() # NOT VITA3K_GAMES_ONLY
 # Single-game executables on the SDL frontend, without the Qt interface (game-frontend/profile.h):
 # the shared frontend is a library, and each game is a small executable with its profile
 # (games/<id>/main.cpp). They run from the folder Vita3K.exe is built into, whose data and
-# shaders-builtin they use.
-if(WIN32)
+# shaders-builtin they use. Windows and Linux.
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	add_library(game-frontend STATIC
 		game-frontend/frontend.cpp game-frontend/profile.h game-frontend/settings.cpp game-frontend/settings.h
 		game-frontend/input.cpp game-frontend/input.h
 		game-frontend/settings_menu.cpp game-frontend/settings_menu.h
 		interface.cpp interface.h performance.cpp)
-	target_link_libraries(game-frontend PUBLIC app audio compat config ctrl dialog display ime lang gdbstub gxm io miniz modules motion ngs overlay packages patch renderer sdl-frontend shader touch util psvpfsparser pugixml::pugixml SDL3::SDL3 Version)
+	target_link_libraries(game-frontend PUBLIC app audio compat config ctrl dialog display ime lang gdbstub gxm io miniz modules motion ngs overlay packages patch renderer sdl-frontend shader touch util psvpfsparser pugixml::pugixml SDL3::SDL3)
+	if(WIN32)
+		target_link_libraries(game-frontend PUBLIC Version)
+	endif()
 	if(USE_DISCORD_RICH_PRESENCE)
 		target_link_libraries(game-frontend PUBLIC discord-rpc)
 	endif()
 
 	# add_game(<target> <sources>...): a game's executable on the shared frontend
 	function(add_game target)
-		add_executable(${target} WIN32 ${ARGN} util/src/vc_runtime_checker.cpp resource.h Windows.manifest)
+		set(sources ${ARGN})
+		if(WIN32)
+			add_executable(${target} WIN32 ${sources} util/src/vc_runtime_checker.cpp resource.h Windows.manifest)
+		else()
+			# the icon and version resource (.ico, .rc) are Windows-only
+			list(FILTER sources EXCLUDE REGEX "\\.(ico|rc)$")
+			add_executable(${target} ${sources})
+			# <id>.x86_64, as Linux game builds are often named: a bare <id> would clash with the
+			# <id>/ folder the frontend keeps its config and log in, next to the executable
+			set_target_properties(${target} PROPERTIES SUFFIX ".${CMAKE_SYSTEM_PROCESSOR}")
+		endif()
 		target_link_libraries(${target} PRIVATE game-frontend)
 		set_target_properties(${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 		if(VITA3K_GAMES_ONLY)

@@ -36,6 +36,12 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 static int reserve_port(CtrlState &state) {
@@ -142,9 +148,9 @@ void refresh_controllers(CtrlState &state, EmuEnvState &emuenv) {
     state.has_motion_support = found_gyro && found_accel;
 }
 
-#ifdef _WIN32
 // Test-only input injection. When VITA3K_INPUT_PIPE is set, a thread serves the named pipe
-// \\.\pipe\<value> and applies one command per line to CtrlState::injected_state:
+// \\.\pipe\<value> (Windows) or the FIFO /tmp/<value>, or <value> itself if it is an absolute
+// path (elsewhere), and applies one command per line to CtrlState::injected_state:
 //   hold <button> [<button>...]   hold exactly these buttons ("hold" or "hold none" releases all)
 //   axes <lx> <ly> <rx> <ry>      stick positions in [-1, 1]
 //   touch <x> <y> ... | none      the frontend holds front-touch fingers at these points (960x544)
@@ -228,6 +234,19 @@ static void apply_injected_command(CtrlState &state, const std::string &line) {
     }
 }
 
+static void apply_injected_text(CtrlState &state, std::string &pending, const char *data, size_t size) {
+    pending.append(data, size);
+    size_t end;
+    while ((end = pending.find('\n')) != std::string::npos) {
+        std::string line = pending.substr(0, end);
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        apply_injected_command(state, line);
+        pending.erase(0, end + 1);
+    }
+}
+
+#ifdef _WIN32
 static void input_pipe_thread(CtrlState &state, std::string pipe_name) {
     for (;;) {
         const HANDLE pipe = CreateNamedPipeA(pipe_name.c_str(), PIPE_ACCESS_INBOUND,
@@ -240,21 +259,34 @@ static void input_pipe_thread(CtrlState &state, std::string pipe_name) {
             std::string pending;
             char buffer[512];
             DWORD read = 0;
-            while (ReadFile(pipe, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
-                pending.append(buffer, read);
-                size_t end;
-                while ((end = pending.find('\n')) != std::string::npos) {
-                    std::string line = pending.substr(0, end);
-                    if (!line.empty() && line.back() == '\r')
-                        line.pop_back();
-                    apply_injected_command(state, line);
-                    pending.erase(0, end + 1);
-                }
-            }
+            while (ReadFile(pipe, buffer, sizeof(buffer), &read, nullptr) && read > 0)
+                apply_injected_text(state, pending, buffer, read);
         }
         CloseHandle(pipe);
     }
 }
+#else
+// one writer at a time, as with the named pipe: open blocks until a driver opens the FIFO for
+// writing, and its commands are read until it closes it
+static void input_pipe_thread(CtrlState &state, std::string pipe_name) {
+    for (;;) {
+        const int fd = open(pipe_name.c_str(), O_RDONLY);
+        if (fd < 0) {
+            if (errno == EINTR)
+                continue;
+            LOG_ERROR("Input pipe: could not open {} ({})", pipe_name, std::strerror(errno));
+            return;
+        }
+        std::string pending;
+        char buffer[512];
+        ssize_t read_size;
+        while ((read_size = read(fd, buffer, sizeof(buffer))) > 0 || (read_size < 0 && errno == EINTR))
+            if (read_size > 0)
+                apply_injected_text(state, pending, buffer, static_cast<size_t>(read_size));
+        close(fd);
+    }
+}
+#endif
 
 static void start_input_pipe(CtrlState &state) {
     static std::once_flag started;
@@ -262,12 +294,21 @@ static void start_input_pipe(CtrlState &state) {
         const char *name = getenv("VITA3K_INPUT_PIPE");
         if (!name || !*name)
             return;
+#ifdef _WIN32
         const std::string pipe_name = fmt::format("\\\\.\\pipe\\{}", name);
+#else
+        const std::string pipe_name = name[0] == '/' ? std::string(name) : fmt::format("/tmp/{}", name);
+        // a fresh FIFO: one left over from an earlier run (or a file of that name) is replaced
+        unlink(pipe_name.c_str());
+        if (mkfifo(pipe_name.c_str(), 0600) != 0) {
+            LOG_ERROR("Input pipe: could not create {} ({})", pipe_name, std::strerror(errno));
+            return;
+        }
+#endif
         LOG_INFO("Input pipe: listening on {}", pipe_name);
         std::thread(input_pipe_thread, std::ref(state), pipe_name).detach();
     });
 }
-#endif
 
 static void apply_injected(uint32_t *buttons, float axes[4], bool ext, const CtrlState &state) {
     const auto &injected = state.injected_state;
@@ -376,9 +417,7 @@ static void apply_controller(EmuEnvState &emuenv, uint32_t *buttons, float axes[
 }
 
 static void retrieve_ctrl_data(EmuEnvState &emuenv, int port, bool is_v2, bool negative, bool from_ext_function, SceUInt32 &buttons, SceUInt8 &lx, SceUInt8 &ly, SceUInt8 &rx, SceUInt8 &ry) {
-#ifdef _WIN32
     start_input_pipe(emuenv.ctrl);
-#endif
     std::lock_guard<std::mutex> guard(emuenv.ctrl.mutex);
 
     if (port == 0) {

@@ -150,8 +150,10 @@ macro(boost_compile)
 			OUTPUT_QUIET
 		)
 	elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+		# position-independent: the static libraries go into PIE executables (a distribution's
+		# Boost, which upstream's CI uses, is built that way already)
 		execute_process(
-			COMMAND ${b2_cmd_line_common} --ignore-site-config toolset=${BOOST_TOOLSET} stage
+			COMMAND ${b2_cmd_line_common} --ignore-site-config toolset=${BOOST_TOOLSET} cxxflags=-fPIC stage
 			WORKING_DIRECTORY ${BOOST_SOURCEDIR}
 			OUTPUT_QUIET
 		)

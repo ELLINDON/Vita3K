@@ -376,6 +376,8 @@ using Kind = SettingSpec::Kind;
 IniSection paths(const std::string &title_id, const std::string &id, const std::string &exe) {
 #ifdef _WIN32
     const std::string example = fmt::format("C:/Games/{}", id), module = "ssd_aot_<module>.dll";
+#elif defined(__APPLE__)
+    const std::string example = fmt::format("/Users/you/Games/{}", id), module = "ssd_aot_<module>.dylib";
 #else
     const std::string example = fmt::format("/home/deck/Games/{}", id), module = "ssd_aot_<module>.so";
 #endif

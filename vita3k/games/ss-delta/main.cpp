@@ -15,7 +15,7 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-// ss-delta.exe: Soul Sacrifice Delta (PCSA00152) on the shared single-game frontend
+// ss-delta.exe: Soul Sacrifice Delta (PCSA00152 US, PCSF00532 EU) on the shared single-game frontend
 // (game-frontend/profile.h). This file holds what is particular to the game: its settings, save
 // import and export, the add-on unlock, Ad Hoc Play, its engine settings and its frame rate.
 
@@ -53,7 +53,26 @@ using game_frontend::SettingSpec;
 using Kind = SettingSpec::Kind;
 namespace layout = game_frontend::layout;
 
-constexpr const char *TITLE_ID = "PCSA00152";
+// The regions the port runs, at update 1.30 (the frontend runs the one installed). Their eboots are
+// one build, the EU one linked 31 s before the US one: the code is byte for byte the same, and the
+// data differs only in build stamps (ss-delta docs/01-research.md, "EU version"). So every guest
+// address below holds for both, and the recompiled modules are the same.
+struct Region {
+    const char *title_id;
+    const char *name;
+};
+constexpr Region REGIONS[] = {
+    { "PCSA00152", "US" },
+    { "PCSF00532", "EU" },
+};
+constexpr const char *TITLE_ID = REGIONS[0].title_id;
+
+const char *region_name(const std::string &title_id) {
+    for (const auto &r : REGIONS)
+        if (title_id == r.title_id)
+            return r.name;
+    return "unknown";
+}
 
 // [multiplayer] adapter: Vita3K's adhoc_addr, an index into this PC's network adapters with an
 // address (net_utils::get_all_assigned_addrs, the list Vita3K's own settings show). The settings
@@ -131,7 +150,7 @@ game_frontend::IniLayout ini_layout() {
     return {
         "ss-delta settings. Lines starting with ; are comments; delete the ; to use a line.",
         {
-            layout::paths(TITLE_ID, id, exe),
+            layout::paths("PCSA00152 for the US game, PCSF00532 for the EU one", id, exe),
             display,
             layout::audio(),
             game,
@@ -150,8 +169,8 @@ game_frontend::IniLayout ini_layout() {
 // The game reads its engine settings from app0:resource/boot_config.ini, "Key<tab>Value" lines in
 // two blocks (development, then retail). Serves a copy, written to `dir`, in which each key of
 // `values` has the given value everywhere it is set; the installed file stays as it is.
-void override_boot_config(EmuEnvState &emuenv, const fs::path &dir, const std::map<std::string, std::string> &values) {
-    const fs::path installed = emuenv.vita_fs_path / "ux0" / "app" / TITLE_ID / "resource" / "boot_config.ini";
+void override_boot_config(EmuEnvState &emuenv, const std::string &title_id, const fs::path &dir, const std::map<std::string, std::string> &values) {
+    const fs::path installed = emuenv.vita_fs_path / "ux0" / "app" / title_id / "resource" / "boot_config.ini";
     fs::ifstream in(installed, std::ios::binary);
     if (!in) {
         LOG_WARN("boot_config.ini not found at {}; the game's own settings stay", installed);
@@ -278,6 +297,9 @@ int main(int argc, char *argv[]) {
 
     game_frontend::Profile profile;
     profile.title_id = TITLE_ID;
+    for (const auto &r : REGIONS)
+        if (r.title_id != profile.title_id)
+            profile.other_title_ids.push_back(r.title_id);
     profile.name = "Soul Sacrifice Delta";
     profile.id = "ss-delta";
     profile.ini = ini_layout();
@@ -303,6 +325,9 @@ int main(int argc, char *argv[]) {
     };
     hooks.before_init = [&](game_frontend::Context &ctx) -> std::optional<int> {
         ss_delta::set_save_user(ctx.user_id);
+        // the frontend has picked the installed region's title ID by now
+        ss_delta::set_save_title(profile.title_id);
+        LOG_INFO("Region: {} ({})", region_name(profile.title_id), profile.title_id);
         if (save.import_from.empty() && save.export_to.empty())
             return std::nullopt;
         const auto &vita_fs = ctx.settings->vita_fs;
@@ -350,7 +375,7 @@ int main(int argc, char *argv[]) {
         // itself is in the game's data (docs/decisions.md D14 in ss-delta)
         if (values.get_bool("game.dlc")) {
             std::string why;
-            if (ss_delta::addon_data_present(emuenv.vita_fs_path / "ux0" / "app" / TITLE_ID, why)) {
+            if (ss_delta::addon_data_present(emuenv.vita_fs_path / "ux0" / "app" / profile.title_id, why)) {
                 std::string message;
                 if (ss_delta::unlock_addons(settings.vita_fs, ctx.data_dir / "save-backups", message))
                     LOG_INFO("Add-ons: {}", message);
@@ -364,7 +389,7 @@ int main(int argc, char *argv[]) {
         std::map<std::string, std::string> boot_config{ { "ResoDown", full_3d ? "0" : "1" } };
         for (const auto &[key, value] : values.section("boot_config"))
             boot_config[key] = value;
-        override_boot_config(emuenv, ctx.data_dir / "game", boot_config);
+        override_boot_config(emuenv, profile.title_id, ctx.data_dir / "game", boot_config);
         if (full_3d)
             emuenv.gxm.on_program_registered = unscale_depth_uvs;
     };

@@ -67,6 +67,9 @@ struct Hooks {
 
 struct Profile {
     std::string title_id; // the installed app: ux0/app/<title_id>
+    // the same game's title IDs in other regions: when title_id is not installed, the first of these
+    // that is runs instead (--title-id <id> picks one), and title_id is set to it before any hook runs
+    std::vector<std::string> other_title_ids;
     std::string name; // the game's name: window title, messages
     std::string id; // file names: <id>.ini, <id>/ (config, log), <id>_<date>.png screenshots
     // the settings file: its layout, from which the default file is written and the file is read

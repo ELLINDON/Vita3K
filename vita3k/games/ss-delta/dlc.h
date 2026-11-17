@@ -25,7 +25,7 @@
 
 namespace ss_delta {
 
-// True when the installed game (app_dir = ux0/app/PCSA00152) has the add-ons' pacts and raiments
+// True when the installed game (app_dir = ux0/app/<title ID>) has the add-ons' pacts and raiments
 // in its data; otherwise `why` says what is missing.
 bool addon_data_present(const fs::path &app_dir, std::string &why);
 

@@ -49,9 +49,10 @@ std::string data_name(int slot, const char *ext) {
 }
 
 std::string save_user = "00";
+std::string save_title = "PCSA00152";
 
 fs::path save_dir(const fs::path &vita_fs, const std::string &user_id = save_user) {
-    return vita_fs / "ux0" / "user" / user_id / "savedata" / "PCSA00152";
+    return vita_fs / "ux0" / "user" / user_id / "savedata" / save_title;
 }
 
 std::string lower_name(const std::string &path) {
@@ -151,6 +152,10 @@ SceAppUtilSaveDataSlotParam slot_param(int slot) {
 
 void set_save_user(const std::string &user_id) {
     save_user = user_id;
+}
+
+void set_save_title(const std::string &title_id) {
+    save_title = title_id;
 }
 
 bool copy_save_to_user(const fs::path &vita_fs, const std::string &from_user, const std::string &to_user, std::string &message) {

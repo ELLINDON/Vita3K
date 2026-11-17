@@ -195,6 +195,8 @@ int run(Profile &profile, int argc, char *argv[]) {
     //                                <id>/elfdumps/ (the input for recompiling), then quit; the
     //                                window stays hidden and the sound off (a setup's step)
     //   --vita-fs <folder>           the Vita file system to use instead of the settings file's
+    //   --title-id <id>              (games released in several regions) run that region's game when
+    //                                more than one is installed
     //   --write-ini <file>           write the default settings file there and quit
     //   --player <1-4>               (games with Ad Hoc Play) a copy of the game for another player,
     //                                with its own Vita user (saves), config and log (<id>/player<N>/);
@@ -210,6 +212,7 @@ int run(Profile &profile, int argc, char *argv[]) {
     std::vector<InstallItem> install_content;
     double dump_elfs_seconds = 0;
     std::string vita_fs_override;
+    std::string title_id_override;
     std::vector<std::string> unknown_args;
     for (size_t i = 0; i < ctx.args.size(); i++) {
         const std::string &arg = ctx.args[i];
@@ -224,6 +227,8 @@ int run(Profile &profile, int argc, char *argv[]) {
             dump_elfs_seconds = std::atof(ctx.args[++i].c_str());
         else if (arg == "--vita-fs" && has_value)
             vita_fs_override = ctx.args[++i];
+        else if (arg == "--title-id" && has_value && !profile.other_title_ids.empty())
+            title_id_override = ctx.args[++i];
         else if (arg == "--write-ini" && has_value) {
             // the default settings file, for packaging scripts; nothing else runs
             const fs::path path = fs_utils::utf8_to_path(ctx.args[++i]);
@@ -271,6 +276,28 @@ int run(Profile &profile, int argc, char *argv[]) {
         LOG_WARN("{}.ini: ignored \"{}\"", profile.id, line);
     for (const auto &arg : unknown_args)
         LOG_WARN("Command line: ignored \"{}\"", arg);
+
+    // a game released in several regions: the installed one runs (title_id first), or --title-id's
+    if (!profile.other_title_ids.empty()) {
+        const auto installed = [&](const std::string &id) { return fs::exists(settings.vita_fs / "ux0" / "app" / id / "eboot.bin"); };
+        const auto known = [&](const std::string &id) {
+            return id == profile.title_id || std::find(profile.other_title_ids.begin(), profile.other_title_ids.end(), id) != profile.other_title_ids.end();
+        };
+        if (!title_id_override.empty()) {
+            if (known(title_id_override))
+                profile.title_id = title_id_override;
+            else
+                LOG_WARN("--title-id {}: not one of this game's title IDs; {} stays", title_id_override, profile.title_id);
+        } else if (!installed(profile.title_id)) {
+            for (const auto &id : profile.other_title_ids) {
+                if (installed(id)) {
+                    profile.title_id = id;
+                    break;
+                }
+            }
+        }
+        LOG_INFO("Title: {}", profile.title_id);
+    }
 
     if (profile.hooks.before_init) {
         if (const auto exit_code = profile.hooks.before_init(ctx))

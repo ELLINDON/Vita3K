@@ -374,15 +374,20 @@ namespace layout {
 using Kind = SettingSpec::Kind;
 
 IniSection paths(const std::string &title_id, const std::string &id, const std::string &exe) {
+#ifdef _WIN32
+    const std::string example = fmt::format("C:/Games/{}", id), module = "ssd_aot_<module>.dll";
+#else
+    const std::string example = fmt::format("/home/deck/Games/{}", id), module = "ssd_aot_<module>.so";
+#endif
     return { "paths", "",
         {
-            { "vita_fs", Kind::Path, fmt::format("C:/Games/{}/fs", id), 0, 0, {},
+            { "vita_fs", Kind::Path, example + "/fs", 0, 0, {},
                 fmt::format("The Vita file system with the installed game (ux0/app/{}) and firmware.\n"
                             "Default: the fs folder next to {}.",
                     title_id, exe),
                 true },
-            { "recompiled", Kind::Path, fmt::format("C:/Games/{}", id), 0, 0, {},
-                fmt::format("Where the recompiled modules (ssd_aot_<module>.dll) are. Default: next to {}.", exe), true },
+            { "recompiled", Kind::Path, example, 0, 0, {},
+                fmt::format("Where the recompiled modules ({}) are. Default: next to {}.", module, exe), true },
         } };
 }
 

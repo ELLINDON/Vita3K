@@ -749,7 +749,10 @@ SceUID load_self(KernelState &kernel, MemState &mem, const void *self, const std
         fs::create_directories(dump_path);
         const auto start = dump_segments[0].p_vaddr;
         const auto end = dump_segments[last_index].p_vaddr + dump_segments[last_index].p_filesz;
-        const auto elf_name = fs::path(self_path).filename().stem().string();
+        // the module's file name without the Vita device ("app0:eboot.bin" -> eboot): Windows reads
+        // "app0:" as a root name, Linux as part of the file name
+        const std::string self_file = self_path.substr(self_path.find_last_of("/:") + 1);
+        const auto elf_name = fs::path(self_file).stem().string();
         const auto filename = dump_path / fmt::format("{}-{}_{}.elf", log_hex_full(start), log_hex_full(end), elf_name);
         fs_utils::dump_data(filename, dump_elf.data(), dump_elf.size());
     }

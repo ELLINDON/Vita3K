@@ -175,6 +175,11 @@ macro(get_boost)
 	if(NOT VITA3K_FORCE_SYSTEM_BOOST)
 		# find_package(Boost ...) setting
 		set(Boost_USE_STATIC_LIBS ON)
+		# a debug runtime is an MSVC notion: elsewhere b2 builds release libraries only, which a
+		# fresh configure of a multi-config build would otherwise reject (boost_filesystem not found)
+		if(NOT MSVC)
+			set(Boost_USE_DEBUG_RUNTIME OFF)
+		endif()
 
 		set(Boost_NO_WARN_NEW_VERSIONS 1)
 

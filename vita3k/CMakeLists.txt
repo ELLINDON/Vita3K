@@ -501,6 +501,12 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
 			# <id>.x86_64, as Linux game builds are often named: a bare <id> would clash with the
 			# <id>/ folder the frontend keeps its config and log in, next to the executable
 			set_target_properties(${target} PROPERTIES SUFFIX ".${CMAKE_SYSTEM_PROCESSOR}")
+			# its icon beside it (games/<id>/<id>.ico), from which the kit's packaging takes the PNG a
+			# desktop entry shows
+			if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/games/${target}/${target}.ico")
+				add_custom_command(TARGET ${target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"${CMAKE_CURRENT_SOURCE_DIR}/games/${target}/${target}.ico" "$<TARGET_FILE_DIR:${target}>")
+			endif()
 		endif()
 		target_link_libraries(${target} PRIVATE game-frontend)
 		set_target_properties(${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")

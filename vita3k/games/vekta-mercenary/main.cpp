@@ -50,7 +50,7 @@ game_frontend::IniSection audio_layout() {
 }
 
 game_frontend::IniLayout ini_layout() {
-    const std::string id = "vekta-mercenary", exe = "vekta-mercenary.exe";
+    const std::string id = "vekta-mercenary", exe = id + game_frontend::executable_suffix;
     return {
         "vekta-mercenary settings. Lines starting with ; are comments; delete the ; to use a line.",
         {

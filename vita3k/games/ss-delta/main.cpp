@@ -119,7 +119,7 @@ SettingSpec language_setting() {
 }
 
 game_frontend::IniLayout ini_layout() {
-    const std::string id = "ss-delta", exe = "ss-delta.exe";
+    const std::string id = "ss-delta", exe = id + game_frontend::executable_suffix;
     IniSection display{ "display", "",
         {
             { "full_3d", Kind::Bool, "true", 0, 0, {},

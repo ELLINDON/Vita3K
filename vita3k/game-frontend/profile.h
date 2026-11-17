@@ -37,6 +37,13 @@ struct EmuEnvState;
 
 namespace game_frontend {
 
+// a game's executable is <id> followed by this (CMake's add_game): <id>.exe, or <id>.x86_64 on Linux
+#ifdef _WIN32
+inline constexpr const char *executable_suffix = ".exe";
+#else
+inline constexpr const char *executable_suffix = ".x86_64";
+#endif
+
 // What the hooks see. Fields that exist only once the emulator runs are null before that.
 struct Context {
     EmuEnvState *emuenv = nullptr;

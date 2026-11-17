@@ -289,8 +289,9 @@ endif()
 
 # the single-game executables ship their OpenSSL DLLs: always the pinned prebuilt one on MSVC, never
 # whatever OpenSSL the build machine has (a CI runner's 3.x would be linked but not shipped). On
-# Linux they link the pinned source release statically, as on macOS: the Steam Runtime SDK has
-# OpenSSL 1.1, and the player's system is not asked for any.
+# Linux they link the pinned source releases of OpenSSL and curl statically (OpenSSL as on macOS):
+# the Steam Runtime SDK has OpenSSL 1.1, SteamOS has no libcurl-gnutls outside the Steam runtime,
+# and the player's system is asked for neither.
 if(VITA3K_GAMES_ONLY AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	set(VITA3K_STATIC_OPENSSL ON)
 endif()
@@ -377,7 +378,9 @@ target_link_libraries(crypto INTERFACE OpenSSL::Crypto)
 # Must be after openssl
 add_subdirectory(psvpfstools)
 
-find_package(CURL QUIET)
+if(NOT VITA3K_STATIC_OPENSSL)
+	find_package(CURL QUIET)
+endif()
 if(NOT CURL_FOUND)
 	message("System curl not found, compiling curl from source")
 	include(FetchContent)
@@ -396,6 +399,14 @@ if(NOT CURL_FOUND)
 	option(BUILD_TESTING "Build tests" OFF)
 	option(BUILD_EXAMPLES "Build libcurl examples" OFF)
 	option(CURL_USE_LIBPSL "Use libpsl" OFF)
+	if(VITA3K_STATIC_OPENSSL)
+		# nothing the build machine happens to have: no IDN, brotli, zstd, HTTP/2 or SSH libraries
+		set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
+		set(CURL_BROTLI OFF CACHE STRING "" FORCE)
+		set(CURL_ZSTD OFF CACHE STRING "" FORCE)
+		set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
+		set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+	endif()
 	FetchContent_Declare(curl
 		GIT_REPOSITORY https://github.com/curl/curl.git
 		GIT_TAG        68720b4837284335b2d63cb358f8f6ce65f5bc55 # release 8.21.0

@@ -65,7 +65,7 @@ game_frontend::IniSection audio_layout() {
 }
 
 game_frontend::IniLayout ini_layout() {
-    const std::string id = "shinobido2", exe = "shinobido2.exe";
+    const std::string id = "shinobido2", exe = id + game_frontend::executable_suffix;
     return {
         "shinobido2 settings. Lines starting with ; are comments; delete the ; to use a line.",
         {

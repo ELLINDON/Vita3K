@@ -30,6 +30,7 @@
 #include <overlay/display_manager.h>
 #include <overlay/shader_precompile_progress.h>
 #include <util/log.h>
+#include <util/thread_qos.h>
 
 #include <memory>
 #include <thread>
@@ -186,6 +187,7 @@ void reset_command_list(CommandList &command_list) {
 }
 
 static void render_loop(renderer::State &state, DisplayState &display, GxmState &gxm, MemState &mem, Config &config) {
+    util::raise_thread_qos();
     if (state.precompile_requested) {
         auto progress_overlay = state.overlay_manager
             ? state.overlay_manager->create<overlay::shader_precompile_progress>()

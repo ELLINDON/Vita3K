@@ -33,6 +33,7 @@
 
 #include <SDL3/SDL_mutex.h>
 #include <SDL3/SDL_thread.h>
+#include <util/thread_qos.h>
 
 int CorenumAllocator::new_corenum() {
     const std::lock_guard<std::mutex> guard(lock);
@@ -62,6 +63,7 @@ static int SDLCALL thread_function(void *data) {
     assert(data != nullptr);
     const ThreadParams params = *static_cast<const ThreadParams *>(data);
     SDL_SignalSemaphore(params.host_may_destroy_params);
+    util::raise_thread_qos();
     ThreadStatePtr thread = params.kernel->get_thread(params.thid);
 #ifdef TRACY_ENABLE
     if (!thread->name.empty()) {

@@ -37,6 +37,7 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <util/thread_qos.h>
 
 namespace sdl_frontend {
 
@@ -290,6 +291,7 @@ int run(EmuEnvState &emuenv, app::AppSessionController &session, AppLaunchReques
         app::LaunchRuntimeMetrics runtime_metrics{};
 
         bool running = !pending_launch_request.has_value();
+        util::raise_thread_qos();
         while (running) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {

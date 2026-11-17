@@ -52,6 +52,7 @@
 #include <util/log.h>
 
 #include <util/tracy.h>
+#include <util/thread_qos.h>
 TRACY_MODULE_NAME(SceGxm);
 
 template <>
@@ -899,6 +900,7 @@ std::string to_debug_str<SceGxmTransferFlags>(const MemState &mem, SceGxmTransfe
 }
 
 static void display_entry_thread(EmuEnvState &emuenv) {
+    util::raise_thread_qos();
     auto &display_queue = emuenv.gxm.display_queue;
     const Address callback_address = emuenv.gxm.params.displayQueueCallback.address();
     const ThreadStatePtr display_thread = emuenv.kernel.get_thread(emuenv.gxm.display_queue_thread);

@@ -27,6 +27,7 @@
 
 #include <util/log.h>
 #include <util/overloaded.h>
+#include <util/thread_qos.h>
 
 #include <cstdlib>
 #include <deque>
@@ -190,6 +191,7 @@ static void trace_query_results(const MemState &mem, Address location, uint32_t 
 }
 
 void VKContext::wait_thread_function(const MemState &mem) {
+    util::raise_thread_qos();
     // try to wait for multiple fences at the same time if possible
     std::vector<vk::Fence> fences;
 

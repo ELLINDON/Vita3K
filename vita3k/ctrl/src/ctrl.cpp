@@ -25,6 +25,7 @@
 #include <kernel/state.h>
 #include <util/log.h>
 
+#include <cmath>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -439,6 +440,17 @@ static void retrieve_ctrl_data(EmuEnvState &emuenv, int port, bool is_v2, bool n
             rx = 0x80;
             ry = 0x80;
         } else {
+            // A stick moves inside a round gate: its diagonals reach about 0.71 on each axis, not 1.
+            // Keys (and sources added together) can reach the square's corner, sqrt(2) long, which
+            // games read as more than full speed (Soul Sacrifice Delta ran about 1.4 times as fast
+            // with W+D as with W). Each stick is kept inside the unit circle.
+            for (int stick = 0; stick < 4; stick += 2) {
+                const float length = std::hypot(axes[stick], axes[stick + 1]);
+                if (length > 1.0f) {
+                    axes[stick] /= length;
+                    axes[stick + 1] /= length;
+                }
+            }
             lx = float_to_byte(axes[0]);
             ly = float_to_byte(axes[1]);
             rx = float_to_byte(axes[2]);

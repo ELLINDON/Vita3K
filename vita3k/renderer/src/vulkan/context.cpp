@@ -956,6 +956,8 @@ void new_frame(VKContext &context) {
                 assert(false);
                 return;
             }
+            // without memory mapping too (macOS: MoltenVK)
+            frame_log(context.frame_timestamp, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gpu_wait_start).count());
         }
 
         // reset the fences in both case (the wait thread does not do that as they can still be used)

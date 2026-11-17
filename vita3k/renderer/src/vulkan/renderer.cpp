@@ -696,10 +696,9 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         }
         support_memory_mapping &= support_standard_layout;
 
-#ifdef __APPLE__
-        // we need to make a copy of the vertex buffer for moltenvk, so disable memory mapping
-        support_memory_mapping = false;
-#endif
+        // Upstream disables memory mapping on Apple, because MoltenVK needed a copy of every vertex
+        // stream. The fork repacks the streams Metal can't fetch in place on every platform
+        // (get_vertex_stream_layout), and mapping works on MoltenVK (ss-delta 08-macos).
 
 #ifdef __ANDROID__
         support_android_buffer_import &= SDL_GetAndroidSDKVersion() >= 26;

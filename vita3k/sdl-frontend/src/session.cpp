@@ -298,6 +298,8 @@ int run(EmuEnvState &emuenv, app::AppSessionController &session, AppLaunchReques
                 switch (event.type) {
                 case SDL_EVENT_QUIT:
                 case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                    // which one (SDL turns SIGTERM and SIGINT into SDL_EVENT_QUIT)
+                    LOG_INFO("Quit requested ({})", event.type == SDL_EVENT_QUIT ? "quit event" : "window closed");
                     running = false;
                     break;
 
@@ -364,8 +366,10 @@ int run(EmuEnvState &emuenv, app::AppSessionController &session, AppLaunchReques
             if (hooks.on_tick)
                 hooks.on_tick();
 
-            if (!session.is_running())
+            if (!session.is_running()) {
+                LOG_INFO("The emulation stopped");
                 running = false;
+            }
 
             if (running)
                 SDL_Delay(16);

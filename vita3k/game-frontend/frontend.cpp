@@ -86,10 +86,12 @@ void set_env(const char *name, const std::string &value) {
 }
 
 // SSD_AOT (the fork's list of recompiled modules) from the libraries in `dir` (ssd_aot_*.dll on
-// Windows, .so elsewhere), unless it is set already
+// Windows, .dylib on macOS, .so elsewhere), unless it is set already
 std::string select_recompiled_modules(const fs::path &dir) {
 #ifdef _WIN32
     constexpr const char *extension = ".dll";
+#elif defined(__APPLE__)
+    constexpr const char *extension = ".dylib";
 #else
     constexpr const char *extension = ".so";
 #endif

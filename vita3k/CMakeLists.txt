@@ -474,8 +474,8 @@ endif() # NOT VITA3K_GAMES_ONLY
 # Single-game executables on the SDL frontend, without the Qt interface (game-frontend/profile.h):
 # the shared frontend is a library, and each game is a small executable with its profile
 # (games/<id>/main.cpp). They run from the folder Vita3K.exe is built into, whose data and
-# shaders-builtin they use. Windows and Linux.
-if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# shaders-builtin they use. Windows, Linux and macOS (a plain executable, not a bundle, for now).
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
 	add_library(game-frontend STATIC
 		game-frontend/frontend.cpp game-frontend/profile.h game-frontend/settings.cpp game-frontend/settings.h
 		game-frontend/input.cpp game-frontend/input.h
@@ -501,6 +501,10 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
 			# <id>.x86_64, as Linux game builds are often named: a bare <id> would clash with the
 			# <id>/ folder the frontend keeps its config and log in, next to the executable
 			set_target_properties(${target} PROPERTIES SUFFIX ".${CMAKE_SYSTEM_PROCESSOR}")
+			if(APPLE)
+				# libMoltenVK.dylib beside it (games-runtime-files), found through the executable's rpath
+				set_target_properties(${target} PROPERTIES BUILD_RPATH "@executable_path" INSTALL_RPATH "@executable_path")
+			endif()
 			# its icon beside it (games/<id>/<id>.ico), from which the kit's packaging takes the PNG a
 			# desktop entry shows
 			if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/games/${target}/${target}.ico")
@@ -526,6 +530,9 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
 				if(USE_DISCORD_RICH_PRESENCE)
 					list(APPEND copies
 						COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_BINARY_DIR}/external/discord_game_sdk/lib/x86_64/discord_game_sdk.dll" "${dir}")
+				endif()
+				if(APPLE)
+					list(APPEND copies COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MOLTENVK_DYLIB}" "${dir}")
 				endif()
 				if(EXISTS "${OPENSSL_ROOT_DIR}")
 					list(APPEND copies

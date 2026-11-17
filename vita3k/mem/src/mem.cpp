@@ -221,9 +221,13 @@ Address alloc_aligned(MemState &state, uint32_t size, const char *name, unsigned
     return align_addr;
 }
 
+// Protected segments cover whole host pages: mprotect works on those (16 KiB on Apple Silicon), so a
+// segment smaller than one would share its page with addresses the tree doesn't know, and a fault
+// there would unprotect the page under a segment that stays in the tree, unwatched
 static void align_to_page(MemState &state, Address &addr, Address &size) {
-    const Address end = align(addr + size, STANDARD_PAGE_SIZE);
-    addr = align_down(addr, STANDARD_PAGE_SIZE);
+    const Address page = std::max<Address>(STANDARD_PAGE_SIZE, state.host_page_size);
+    const Address end = align(addr + size, page);
+    addr = align_down(addr, page);
     size = end - addr;
 }
 
@@ -344,7 +348,9 @@ bool add_protect(MemState &state, Address addr, const uint32_t size, const MemPe
             --it;
     }
 
-    while (it != state.protect_tree.end() && it->first < addr + size) {
+    // every segment overlapping the aligned (and growing) range; the caller's unaligned size would miss
+    // those past its end in the same pages
+    while (it != state.protect_tree.end() && it->first < addr + protect.size) {
         const Address start = std::min(it->first, addr);
         protect.size = std::max(it->first + it->second.size, addr + protect.size) - start;
         addr = start;

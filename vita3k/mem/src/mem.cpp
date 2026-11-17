@@ -35,6 +35,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
 
 constexpr uint32_t STANDARD_PAGE_SIZE = KiB(4);
 constexpr size_t TOTAL_MEM_SIZE = GiB(4);
@@ -182,6 +186,14 @@ static Address alloc_inner(MemState &state, uint32_t start_page, uint32_t page_c
 #else
     const int ret = mprotect(commit_ptr, commit_size, PROT_READ | PROT_WRITE);
     LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
+    // a host page larger than the Vita's (16 KiB on Apple Silicon) may also hold a tracked segment
+    // next to the new block: the line above made it writable, so protect it again
+    if (state.host_page_size > STANDARD_PAGE_SIZE) {
+        const std::lock_guard<std::mutex> lock(state.protect_mutex);
+        // the tree is in descending order: from the last segment starting before commit_end down
+        for (auto it = state.protect_tree.lower_bound(commit_end - 1); it != state.protect_tree.end() && it->first + it->second.size > commit_start; ++it)
+            protect_inner(state, it->first, it->second.size, it->second.perm);
+    }
 #endif
     std::memset(&state.memory[addr], 0, size);
 
@@ -272,6 +284,26 @@ void protect_inner(MemState &state, Address addr, uint32_t size, const MemPerm p
 #endif
 }
 
+// Whether the host page holding addr allows the access now (macOS only; elsewhere: unknown, false)
+static bool page_accessible(const uint8_t *addr, bool write) {
+#ifdef __APPLE__
+    mach_vm_address_t region = reinterpret_cast<mach_vm_address_t>(addr);
+    mach_vm_size_t size = 0;
+    vm_region_basic_info_data_64_t info{};
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    if (mach_vm_region(mach_task_self(), &region, &size, VM_REGION_BASIC_INFO_64, reinterpret_cast<vm_region_info_t>(&info), &count, &object) != KERN_SUCCESS)
+        return false;
+    if (region > reinterpret_cast<mach_vm_address_t>(addr))
+        return false;
+    return (info.protection & (write ? VM_PROT_WRITE : VM_PROT_READ)) != 0;
+#else
+    (void)addr;
+    (void)write;
+    return false;
+#endif
+}
+
 bool handle_access_violation(MemState &state, uint8_t *addr, bool write) noexcept {
     const uintptr_t memory_addr = reinterpret_cast<uintptr_t>(state.memory.get());
     const uintptr_t fault_addr = reinterpret_cast<uintptr_t>(addr);
@@ -303,7 +335,13 @@ bool handle_access_violation(MemState &state, uint8_t *addr, bool write) noexcep
     }
 
     auto it = state.protect_tree.lower_bound(vaddr);
-    if (it == state.protect_tree.end()) {
+    if (it == state.protect_tree.end() || vaddr < it->first || vaddr >= it->first + it->second.size) {
+        // Another thread's fault on the same host page may have been handled (its segment
+        // unprotected and erased) while this one waited for protect_mutex: then the page is accessible
+        // again and the access just has to be retried. Likelier with larger host pages (16 KiB on
+        // Apple Silicon), so macOS checks the page's protection before calling it unhandled.
+        if (page_accessible(addr, write))
+            return true;
         // HACK: keep going
         unprotect_inner(state, align_down(vaddr, state.host_page_size), state.host_page_size);
         LOG_CRITICAL("Unhandled write protected region was valid. Address=0x{:X}", vaddr);
@@ -311,12 +349,6 @@ bool handle_access_violation(MemState &state, uint8_t *addr, bool write) noexcep
     }
 
     ProtectSegmentInfo &info = it->second;
-    if (vaddr < it->first || vaddr >= it->first + info.size) {
-        // HACK: keep going
-        unprotect_inner(state, align_down(vaddr, state.host_page_size), state.host_page_size);
-        LOG_CRITICAL("Unhandled write protected region was valid. Address=0x{:X}", vaddr);
-        return true;
-    }
 
     Address previous_beg = it->first;
     for (auto &[block_addr, block] : info.blocks) {
@@ -437,6 +469,12 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
         }
 
         while (prot_it != mem.protect_tree.end() && prot_it->first < mapping.address + mapping.size) {
+            // a segment covers whole host pages and may reach past the mapping: tell its owners the
+            // memory changed (it is going away) and unprotect all of it, or the rest would stay
+            // protected with no segment to handle its faults
+            for (auto &[block_addr, block] : prot_it->second.blocks)
+                block.callback(prot_it->first, true);
+            unprotect_inner(mem, prot_it->first, prot_it->second.size);
             if (prot_it == mem.protect_tree.begin()) {
                 mem.protect_tree.erase(prot_it);
                 break;

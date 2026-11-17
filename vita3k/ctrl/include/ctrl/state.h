@@ -79,7 +79,7 @@ struct CtrlState {
     uint64_t last_vcount[5] = {}; // sceCtrl ports.
 
     VirtualKeyboardState keyboard_state;
-    // buttons and sticks held by an external test driver (VITA3K_INPUT_PIPE, Windows only)
+    // buttons and sticks held by an external test driver (VITA3K_INPUT_PIPE: a named pipe on Windows, a FIFO elsewhere)
     VirtualKeyboardState injected_state;
     // PNG paths the test driver asked to save the current frame to (the frontend takes them)
     std::vector<std::string> injected_screenshots;

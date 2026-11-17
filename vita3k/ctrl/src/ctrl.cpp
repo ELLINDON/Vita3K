@@ -266,25 +266,27 @@ static void input_pipe_thread(CtrlState &state, std::string pipe_name) {
     }
 }
 #else
-// one writer at a time, as with the named pipe: open blocks until a driver opens the FIFO for
-// writing, and its commands are read until it closes it
+// Opened read-write, so the thread holds a writer of its own: read() never sees end-of-file when a
+// driver closes the FIFO, and the FIFO always has a reader. A thread that closed and reopened it at
+// each end-of-file left a window in which a driver's next open succeeded and its write then found
+// no reader (SIGPIPE: a shell driver writing one command per open died mid-run, a few times in 50
+// maps). Drivers write whole lines, each under PIPE_BUF, so commands from several writers don't mix.
 static void input_pipe_thread(CtrlState &state, std::string pipe_name) {
-    for (;;) {
-        const int fd = open(pipe_name.c_str(), O_RDONLY);
-        if (fd < 0) {
-            if (errno == EINTR)
-                continue;
-            LOG_ERROR("Input pipe: could not open {} ({})", pipe_name, std::strerror(errno));
-            return;
-        }
-        std::string pending;
-        char buffer[512];
-        ssize_t read_size;
-        while ((read_size = read(fd, buffer, sizeof(buffer))) > 0 || (read_size < 0 && errno == EINTR))
-            if (read_size > 0)
-                apply_injected_text(state, pending, buffer, static_cast<size_t>(read_size));
-        close(fd);
+    int fd;
+    while ((fd = open(pipe_name.c_str(), O_RDWR)) < 0 && errno == EINTR) {
     }
+    if (fd < 0) {
+        LOG_ERROR("Input pipe: could not open {} ({})", pipe_name, std::strerror(errno));
+        return;
+    }
+    std::string pending;
+    char buffer[512];
+    ssize_t read_size;
+    while ((read_size = read(fd, buffer, sizeof(buffer))) > 0 || (read_size < 0 && errno == EINTR))
+        if (read_size > 0)
+            apply_injected_text(state, pending, buffer, static_cast<size_t>(read_size));
+    LOG_ERROR("Input pipe: reading {} failed ({})", pipe_name, std::strerror(errno));
+    close(fd);
 }
 #endif
 

@@ -95,6 +95,29 @@ SettingSpec adapter_setting() {
     return s;
 }
 
+// [game] language: the Vita's system language, which the game reads once at boot. It has no
+// language option of its own: the US region shows French, Spanish or Portuguese (Brazil) for those
+// system languages and English for any other; the EU region French, Spanish, German or Italian,
+// and English (UK) otherwise (ss-delta docs/01-research.md, "Text language").
+const std::map<std::string, SceSystemParamLang> LANGUAGES{
+    { "english", SCE_SYSTEM_PARAM_LANG_ENGLISH_US },
+    { "french", SCE_SYSTEM_PARAM_LANG_FRENCH },
+    { "spanish", SCE_SYSTEM_PARAM_LANG_SPANISH },
+    { "german", SCE_SYSTEM_PARAM_LANG_GERMAN },
+    { "italian", SCE_SYSTEM_PARAM_LANG_ITALIAN },
+    { "portuguese", SCE_SYSTEM_PARAM_LANG_PORTUGUESE_BR },
+};
+
+SettingSpec language_setting() {
+    SettingSpec s{ "language", Kind::Choice, "english", 0, 0, { "english", "french", "spanish", "german", "italian", "portuguese" },
+        "The game's language, also in the system dialogs: english, french, spanish, german, italian,\n"
+        "portuguese. The US game has English, French, Spanish and Portuguese (Brazil), the EU game\n"
+        "English, French, Spanish, German and Italian; one the installed game lacks gives English." };
+    s.title = "Language";
+    s.choice_labels = { "English", "French", "Spanish", "German (EU game)", "Italian (EU game)", "Portuguese (US game)" };
+    return s;
+}
+
 game_frontend::IniLayout ini_layout() {
     const std::string id = "ss-delta", exe = "ss-delta.exe";
     IniSection display{ "display", "",
@@ -127,6 +150,7 @@ game_frontend::IniLayout ini_layout() {
             "game's own data since update 1.30; PSN, which recorded the purchases, is closed. The save's\n"
             "system.bin is changed once (a copy goes to ss-delta/save-backups/)." } } };
     game.settings[0].title = "Add-ons (DLC)";
+    game.settings.push_back(language_setting());
     IniSection multiplayer{ "multiplayer", "",
         {
             { "network", Kind::Choice, "local", 0, 0, { "local", "lan" },
@@ -354,6 +378,8 @@ int main(int argc, char *argv[]) {
         // the fog colour leaves the vertex shaders as COLOR0/COLOR1 and goes above 1 (blue haze in ST02A
         // without the clamp; grey, as on the Vita, with it)
         cfg.clamp_color_varyings = true;
+        // [game] language: the system language the game asks SceAppUtil for at boot
+        cfg.sys_lang = LANGUAGES.at(values.get("game.language"));
         // [multiplayer] gamepad: one gamepad per copy of the game, read also while its window is in
         // the background
         if (values.get_int("multiplayer.gamepad") > 0)

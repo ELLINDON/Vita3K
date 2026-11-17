@@ -16,9 +16,12 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <net/socket.h>
+#include <util/log.h>
 #include <util/net_utils.h>
 
 #include <bit>
+#include <cstdlib>
+#include <string>
 
 #ifdef _WIN32
 // mstcpip.h's SIO_UDP_CONNRESET (that header clashes with net/types.h)
@@ -102,8 +105,26 @@ int P2PSocket::connect(const SceNetSockaddr *addr, unsigned int addrlen) {
     return PosixSocket::connect(&p2p_addr, addrlen);
 }
 
+// VITA3K_NET_TRACE=1: every P2P datagram sent or received, and every failed send (Ad Hoc Play
+// debugging across machines, where a packet capture needs root)
+static bool net_trace() {
+    static const bool on = [] {
+        const char *env = std::getenv("VITA3K_NET_TRACE");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
+
+static std::string addr_str(const SceNetSockaddr &addr) {
+    const auto &in = reinterpret_cast<const SceNetSockaddrIn &>(addr);
+    const auto a = reinterpret_cast<const uint8_t *>(&in.sin_addr.s_addr);
+    return fmt::format("{}.{}.{}.{}:{}", a[0], a[1], a[2], a[3], ntohs(in.sin_port));
+}
+
 int P2PSocket::recv_packet(void *buf, unsigned int len, int flags, SceNetSockaddr *from, unsigned int *fromlen) {
     const auto res = PosixSocket::recv_packet(buf, len, flags, from, fromlen);
+    if (net_trace() && res > 0 && from)
+        LOG_INFO("P2P recv socket {}: {} bytes from {} (host port)", static_cast<int64_t>(sock), res, addr_str(*from));
     if ((res > 0) && from)
         *from = convertPosixToP2P(from);
 
@@ -126,7 +147,11 @@ int P2PSocket::send_packet(const void *msg, unsigned int len, int flags, const S
         }
         return res;
     }
-    return PosixSocket::send_packet(msg, len, flags, &p2p_to, tolen);
+    const int res = PosixSocket::send_packet(msg, len, flags, &p2p_to, tolen);
+    if (net_trace())
+        LOG_INFO("P2P send socket {}: {} bytes to {} (host port): {}", static_cast<int64_t>(sock), len,
+            to ? addr_str(p2p_to) : std::string("(connected)"), res >= 0 ? fmt::format("sent {}", res) : log_hex(res));
+    return res;
 }
 
 int P2PSocket::bind(const SceNetSockaddr *addr, unsigned int addrlen) {

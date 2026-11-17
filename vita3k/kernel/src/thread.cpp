@@ -67,6 +67,22 @@ int ThreadState::init(const char *name, Ptr<const void> entry_point, int init_pr
     cpu->import_handler = [this](CPUState &cpu_state, uint32_t nid) {
         kernel.call_import(cpu_state, nid, id);
     };
+    // Ad hoc matching over a network instead of a Vita's direct link: games set the retransmit
+    // interval of sceNetAdhocMatchingCreate (argument 8, on the stack at sp + 12) for the Vita's few
+    // ms of latency. Soul Sacrifice Delta: 8 ms, 3 retries, so a joiner gave up after 25 ms, and a
+    // host on Wi-Fi with power saving (laptops, the Steam Deck: 3 to 300 ms) could never be joined.
+    // The interval is raised to at least MIN_ADHOC_REXMT_US.
+    cpu->lle_call_hook = [this](CPUState &, uint32_t target, uint32_t sp) {
+        const Address create = kernel.adhoc_matching_create.load(std::memory_order_relaxed);
+        if (!create || (target & ~1u) != (create & ~1u))
+            return;
+        constexpr uint32_t MIN_ADHOC_REXMT_US = 250000;
+        uint32_t &rexmt = *Ptr<uint32_t>(sp + 12).get(mem);
+        if (rexmt < MIN_ADHOC_REXMT_US) {
+            LOG_INFO("sceNetAdhocMatchingCreate: retransmit interval {} us raised to {} us (network latency)", rexmt, MIN_ADHOC_REXMT_US);
+            rexmt = MIN_ADHOC_REXMT_US;
+        }
+    };
     if (kernel.debugger.watch_code) {
         set_log_code(*cpu, true);
     }

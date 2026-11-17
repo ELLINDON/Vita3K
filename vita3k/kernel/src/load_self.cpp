@@ -45,6 +45,7 @@
 
 static constexpr uint32_t NID_MODULE_STOP = 0x79F8E492;
 static constexpr uint32_t NID_MODULE_EXIT = 0x913482A9;
+static constexpr uint32_t NID_ADHOC_MATCHING_CREATE = 0x7BAD7EA2; // sceNetAdhocMatchingCreate
 static constexpr uint32_t NID_MODULE_START = 0x935CD196;
 static constexpr uint32_t NID_MODULE_INFO = 0x6C2224BA;
 static constexpr uint32_t NID_SYSLYB = 0x936c8a78;
@@ -276,6 +277,8 @@ static bool load_func_exports(SceKernelModuleInfo *kernel_module_info, const uin
         // Only the library that actually took the plain NID entry may drop it again.
         if (kernel.export_nids.emplace(nid, entry.address()).second)
             kernel.export_nid_owners.insert_or_assign(nid, library_nid);
+        if (nid == NID_ADHOC_MATCHING_CREATE)
+            kernel.adhoc_matching_create = entry.address();
         kernel.export_nids_by_lib.insert_or_assign(lib_export_key(library_nid, nid), entry.address());
         // substitute supervisor calls to direct function calls in loaded modules
         auto range = kernel.func_binding_infos.equal_range(nid);
@@ -316,6 +319,8 @@ static bool unload_func_exports(const uint32_t *nids, const Ptr<uint32_t> *entri
             continue;
 
         const Address unloaded_address = entries[i].address();
+        if (nid == NID_ADHOC_MATCHING_CREATE && kernel.adhoc_matching_create == unloaded_address)
+            kernel.adhoc_matching_create = 0;
         // Another module may have taken this library key since, and its export is still live.
         if (const auto lib_it = kernel.export_nids_by_lib.find(lib_export_key(library_nid, nid)); lib_it != kernel.export_nids_by_lib.end() && lib_it->second == unloaded_address)
             kernel.export_nids_by_lib.erase(lib_it);

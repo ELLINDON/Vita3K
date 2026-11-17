@@ -120,6 +120,8 @@ void NativeCPU::aot_call_import(uint32_t stub) {
             const uint32_t hi = ((words[1] >> 4) & 0xf000) | (words[1] & 0xfff);
             const uint32_t target = (hi << 16) | lo;
             if (const AotFn fn = aot_lookup(target)) {
+                if (parent->lle_call_hook)
+                    parent->lle_call_hook(*parent, target, guest.r[13]);
                 guest.r[12] = target;
                 fn(&guest);
                 return;

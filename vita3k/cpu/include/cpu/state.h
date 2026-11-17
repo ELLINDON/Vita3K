@@ -40,6 +40,9 @@ struct CPUState {
     // instead of returning to the thread's run loop; aot_unwind asks it to abandon its frames
     // because the thread is exiting.
     std::function<void(CPUState &, uint32_t nid)> import_handler;
+    // Called before native code enters another module's (LLE) export through an import stub, with the
+    // export's address and the caller's stack pointer: may adjust the call's arguments (kernel).
+    std::function<void(CPUState &, uint32_t target, uint32_t sp)> lle_call_hook;
     std::atomic<bool> aot_unwind{ false };
 
     // Exception handler support (kubridge abort handlers)

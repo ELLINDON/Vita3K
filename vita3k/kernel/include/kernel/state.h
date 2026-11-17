@@ -139,6 +139,10 @@ struct KernelState {
     VarBindingInfos var_binding_infos;
     ModuleUidByNid module_uid_by_nid;
 
+    // The firmware's sceNetAdhocMatchingCreate (LLE, SceNetAdhocMatching), while its module is loaded
+    // (0 otherwise): calls into it get a longer retransmit interval (thread.cpp, before_lle_call)
+    std::atomic<Address> adhoc_matching_create{ 0 };
+
     bool cpu_opt;
     CorenumAllocator corenum_allocator;
     CallImportFunc call_import;

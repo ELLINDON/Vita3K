@@ -16,6 +16,9 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <net/epoll.h>
+#include <util/log.h>
+
+#include <cerrno>
 
 #include <optional>
 
@@ -91,6 +94,8 @@ int Epoll::wait(SceNetEpollEvent *events, int maxevents, int timeout_microsecond
     timeout.tv_sec = timeout_microseconds / 1000000;
     timeout.tv_usec = timeout_microseconds % 1000000;
     auto ret = select(maxFd + 1, &readFds, &writeFds, &exceptFds, &timeout);
+    if (net_trace_enabled())
+        LOG_INFO("Epoll wait: {} entries, timeout {} us: {} (errno {})", eventEntries.size(), timeout_microseconds, ret, ret < 0 ? errno : 0);
     if (ret < 0)
         return PosixSocket::translate_return_value(ret);
 

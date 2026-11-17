@@ -666,6 +666,8 @@ EXPORT(int, sceNetSocket, const char *name, int domain, SceNetSocketType type, S
 
     auto id = ++emuenv.net.next_id;
     emuenv.net.socks.emplace(id, sock);
+    if (net_trace_enabled())
+        LOG_INFO("Socket {}: \"{}\", type {}", id, name ? name : "", static_cast<int>(type));
     return id;
 }
 

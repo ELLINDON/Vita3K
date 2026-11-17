@@ -106,8 +106,9 @@ int P2PSocket::connect(const SceNetSockaddr *addr, unsigned int addrlen) {
 }
 
 // VITA3K_NET_TRACE=1: every P2P datagram sent or received, and every failed send (Ad Hoc Play
-// debugging across machines, where a packet capture needs root)
-static bool net_trace() {
+// debugging across machines, where a packet capture needs root); also socket aborts, closes and
+// epoll waits (posixsocket.cpp, epoll.cpp)
+bool net_trace_enabled() {
     static const bool on = [] {
         const char *env = std::getenv("VITA3K_NET_TRACE");
         return env && env[0] == '1';
@@ -123,7 +124,7 @@ static std::string addr_str(const SceNetSockaddr &addr) {
 
 int P2PSocket::recv_packet(void *buf, unsigned int len, int flags, SceNetSockaddr *from, unsigned int *fromlen) {
     const auto res = PosixSocket::recv_packet(buf, len, flags, from, fromlen);
-    if (net_trace() && res > 0 && from)
+    if (net_trace_enabled() && res > 0 && from)
         LOG_INFO("P2P recv socket {}: {} bytes from {} (host port)", static_cast<int64_t>(sock), res, addr_str(*from));
     if ((res > 0) && from)
         *from = convertPosixToP2P(from);
@@ -148,7 +149,7 @@ int P2PSocket::send_packet(const void *msg, unsigned int len, int flags, const S
         return res;
     }
     const int res = PosixSocket::send_packet(msg, len, flags, &p2p_to, tolen);
-    if (net_trace())
+    if (net_trace_enabled())
         LOG_INFO("P2P send socket {}: {} bytes to {} (host port): {}", static_cast<int64_t>(sock), len,
             to ? addr_str(p2p_to) : std::string("(connected)"), res >= 0 ? fmt::format("sent {}", res) : log_hex(res));
     return res;

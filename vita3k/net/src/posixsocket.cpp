@@ -17,6 +17,7 @@
 
 #include <cstring>
 #include <net/socket.h>
+#include <util/log.h>
 
 // NOTE: This should be SCE_NET_##errname but it causes vitaQuake to softlock in online games
 #ifdef _WIN32
@@ -223,21 +224,70 @@ int PosixSocket::abort(int flags) {
 
     return 0;
 #else
-    return translate_return_value(shutdown(sock, SHUT_RDWR));
+    if (wake_blocked_receive()) {
+        if (net_trace_enabled())
+            LOG_INFO("Socket {}: abort (flags {}), a blocked receive woken", sock, flags);
+        return 0;
+    }
+    const int res = translate_return_value(shutdown(sock, SHUT_RDWR));
+    if (net_trace_enabled())
+        LOG_INFO("Socket {}: abort (flags {}): {}", sock, flags, log_hex(res));
+    return res;
 #endif
 }
+
+#ifndef _WIN32
+// On a Vita, aborting or closing a socket wakes a thread blocked receiving on it, and closesocket()
+// does on Windows. On POSIX hosts close() doesn't, and shutdown() of an unconnected datagram socket
+// fails with ENOTCONN (macOS wakes nothing then; Linux does, but still fails). So a datagram socket
+// sends itself an empty datagram: the blocked recvfrom() returns, sees the abort and reports EINTR.
+// Soul Sacrifice Delta waits for its network thread to end after leaving an Ad Hoc Play room: on
+// macOS that thread stayed in recvfrom() and the game stopped responding.
+bool PosixSocket::wake_blocked_receive() {
+    int type = 0;
+    socklen_t type_len = sizeof(type);
+    if (getsockopt(sock, SOL_SOCKET, SO_TYPE, &type, &type_len) != 0 || type != SOCK_DGRAM)
+        return false;
+    sockaddr_in self{};
+    socklen_t self_len = sizeof(self);
+    if (getsockname(sock, reinterpret_cast<sockaddr *>(&self), &self_len) != 0 || self.sin_family != AF_INET || self.sin_port == 0)
+        return false;
+    if (self.sin_addr.s_addr == htonl(INADDR_ANY))
+        self.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    const int waker = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (waker < 0)
+        return false;
+    sendto(waker, "", 0, 0, reinterpret_cast<const sockaddr *>(&self), sizeof(self));
+    ::close(waker);
+    return true;
+}
+#endif
 
 int PosixSocket::close() {
 #ifdef _WIN32
     auto out = closesocket(sock);
 #else
+    is_aborted = true;
+    wake_blocked_receive();
+    if (net_trace_enabled())
+        LOG_INFO("Socket {}: close", sock);
     auto out = ::close(sock);
 #endif
     return translate_return_value(out);
 }
 
 int PosixSocket::shutdown_socket(int how) {
-    return translate_return_value(shutdown(sock, how));
+    const int res = translate_return_value(shutdown(sock, how));
+#ifndef _WIN32
+    // a receive side shut down wakes a blocked receive, as on a Vita (see wake_blocked_receive)
+    if (how == SHUT_RD || how == SHUT_RDWR) {
+        is_aborted = true;
+        wake_blocked_receive();
+    }
+#endif
+    if (net_trace_enabled())
+        LOG_INFO("Socket {}: shutdown ({}): {}", static_cast<int64_t>(sock), how, log_hex(res));
+    return res;
 }
 
 SocketPtr PosixSocket::accept(SceNetSockaddr *addr, unsigned int *addrlen, int &err) {

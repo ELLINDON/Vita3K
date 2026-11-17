@@ -70,6 +70,9 @@ struct Socket {
 };
 
 // udp, tcp
+// VITA3K_NET_TRACE=1: log ad hoc socket traffic (p2psocket.cpp)
+bool net_trace_enabled();
+
 struct PosixSocket : public Socket {
     abs_socket sock;
 
@@ -94,6 +97,10 @@ struct PosixSocket : public Socket {
         , sock(sock) {}
 
     static int translate_return_value(int retval);
+#ifndef _WIN32
+    // a datagram socket: wakes a thread blocked receiving on it (true when it was one)
+    bool wake_blocked_receive();
+#endif
 
     int abort(int flags) override;
     int close() override;

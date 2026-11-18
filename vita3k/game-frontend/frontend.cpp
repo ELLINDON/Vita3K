@@ -217,6 +217,8 @@ your own dump of the game, then the game starts. Everything stays in the game's 
   --cache <folder>, --jobs <n>
                               (with --dump) keep the importer's downloads in that folder for the
                               next time; compile with that many jobs
+  --progress                  (with --dump) also print "progress <0-1> <text>" lines, for a
+                              launcher's progress bar (RecompLauncher)
   --set <section.key=value>   a setting for this run only, over the settings file (the list below)
   --fullscreen, --windowed    the same as --set display.fullscreen=true / false
   --player <1-4>              (games with Ad Hoc Play) the copy of another player, with a Vita user
@@ -273,7 +275,7 @@ int run(Profile &profile, int argc, char *argv[]) {
             (arg == "--license" ? install_content.back().license : install_content.back().zrif) = ctx.args[++i];
         else if (arg == "--install")
             open_importer = true;
-        else if (arg == "--accept-microsoft-license" || arg == "--shortcut" || arg == "--steam")
+        else if (arg == "--accept-microsoft-license" || arg == "--shortcut" || arg == "--steam" || arg == "--progress")
             importer_options.push_back(arg);
         else if ((arg == "--cache" || arg == "--jobs") && has_value)
             importer_options.insert(importer_options.end(), { arg, arg == "--cache" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[i + 1]))) : ctx.args[i + 1] }), i++;

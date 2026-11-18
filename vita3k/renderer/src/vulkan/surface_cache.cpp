@@ -2034,6 +2034,16 @@ std::vector<uint32_t> VKSurfaceCache::dump_frame(Ptr<const void> address, uint32
 
     const uint32_t real_height = std::min(height, info.height - line_delta);
 
+    // the copy below writes the image's texels into a host-mapped buffer sized for width * height texels of 4 bytes:
+    // an image of another texel size, or smaller than the region asked for, would have the GPU write past it
+    const vk::Format format = info.texture.format;
+    if (!info.texture.image || width == 0 || real_height == 0 || vk::blockSize(format) != 4 || vk::texelsPerBlock(format) != 1
+        || width > info.texture.width || line_delta + real_height > info.texture.height) {
+        LOG_WARN("Frame dump skipped: surface {} is {}x{} {}, the frame {}x{} from line {}", log_hex(ite->first),
+            info.texture.width, info.texture.height, vk::to_string(format), width, real_height, line_delta);
+        return {};
+    }
+
     std::vector<uint32_t> frame(width * height, 0);
 
     // we need a temporary buffer and command buffer for this

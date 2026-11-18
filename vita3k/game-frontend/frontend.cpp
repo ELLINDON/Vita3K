@@ -526,7 +526,10 @@ int run(Profile &profile, int argc, char *argv[]) {
         if (!window)
             return;
         SDL_SetWindowTitle(window, ctx.window_name.c_str());
-        // the game's own icon, from the player's installed copy
+        // the game's own icon, from the player's installed copy. Not on macOS: there a window has no
+        // icon, and SDL would replace the Dock icon, the app bundle's (shaped as a macOS icon), with
+        // this square picture
+#ifndef __APPLE__
         const fs::path icon_path = emuenv.vita_fs_path / "ux0" / "app" / profile.title_id / "sce_sys" / "icon0.png";
         int icon_w = 0, icon_h = 0, channels = 0;
         if (stbi_uc *pixels = stbi_load(fs_utils::path_to_utf8(icon_path).c_str(), &icon_w, &icon_h, &channels, 4)) {
@@ -536,6 +539,7 @@ int run(Profile &profile, int argc, char *argv[]) {
             }
             stbi_image_free(pixels);
         }
+#endif
         SDL_SetWindowSize(window, 960 * settings.window_scale, 544 * settings.window_scale);
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         if (settings.fullscreen && !hooks.hidden_window)

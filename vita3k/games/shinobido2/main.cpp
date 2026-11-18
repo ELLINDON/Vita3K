@@ -349,6 +349,12 @@ int main(int argc, char *argv[]) {
     profile.ini = ini_layout();
     profile.default_touches = { { "caution", 896, 260, "F", "righttrigger" } };
     profile.touch_targets["caution"] = caution_eye;
+    profile.usage = "Saves (then quit):\n"
+                    "  --import-save <folder|zip>  copy decrypted Vita saves (e.g. from a Vita) in, keeping the\n"
+                    "                              old ones in shinobido2/save-backups/\n"
+                    "  --export-save <folder>      copy saves out\n"
+                    "  --slot <0-9>                one save slot for the two above (default: every slot)\n"
+                    "  --quiet                     no message box for the two above (the result is in the log)\n";
     profile.hooks.parse_arg = [&](game_frontend::Context &, const std::vector<std::string> &args, size_t &i) {
         const std::string &arg = args[i];
         const bool has_value = i + 1 < args.size();

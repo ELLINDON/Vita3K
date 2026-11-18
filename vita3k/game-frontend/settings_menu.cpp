@@ -146,6 +146,15 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
         if (std::any_of(page.rows.begin(), page.rows.end(), [](const Row &r) { return r.editable; }))
             m_pages.push_back(std::move(page));
     }
+    // the last page: Exit the game (a launcher's or a Steam Deck's player has no other way out in
+    // fullscreen), confirmed with a second Cross
+    {
+        Row row;
+        row.spec.title = "Exit the game";
+        row.spec.help = "Closes the game. Progress since the game last saved is lost; settings changed here are already saved.";
+        row.exit = true;
+        m_pages.push_back({ "Exit", { std::move(row) } });
+    }
     // start on Display, the page most changes are on
     for (size_t i = 0; i < m_pages.size(); i++)
         if (m_pages[i].title == "Display")
@@ -164,7 +173,7 @@ void SettingsMenu::request_close() {
 }
 
 void SettingsMenu::step(Row &row, int direction) {
-    if (!row.editable)
+    if (!row.editable || row.exit)
         return;
     const SettingSpec &spec = row.spec;
     // an unset (commented) setting starts from its example value
@@ -236,6 +245,15 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
         Row *row = nullptr;
         if (!m_pages.empty() && m_row < m_pages[m_page].rows.size())
             row = &m_pages[m_page].rows[m_row];
+        // Exit the game: Cross (or Start) once arms it, a second time exits; any other button disarms
+        const bool confirm = button == pad_button::cross || button == pad_button::start;
+        if (row && row->exit && confirm) {
+            if (m_exit_armed)
+                m_exit_requested.store(true);
+            m_exit_armed = true;
+            button = pad_button::pad_button_max_enum; // handled
+        } else
+            m_exit_armed = false;
         switch (button) {
         case pad_button::dpad_up:
         case pad_button::ls_up:
@@ -310,11 +328,12 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
                 result.add(rect(PANEL_X + 16, y, PANEL_W - 32, ROW_H - 4, SELECTED, 6).get_compiled());
             result.add(text(row.spec.title.empty() ? row_title(row.spec.key) : row.spec.title, PANEL_X + 34, y + 6, 330, 24, 16, TEXT).get_compiled());
             // the value, shortened with "..." to fit its column (a network adapter's long name)
-            const std::string arrows_l = row.editable && selected && row.spec.kind != Kind::Bool ? "<  " : "";
+            const std::string arrows_l = row.editable && !row.exit && selected && row.spec.kind != Kind::Bool ? "<  " : "";
             const std::string arrows_r = (arrows_l.empty() ? "" : "  >") + std::string(row.needs_restart ? "  *" : "");
             constexpr uint16_t VALUE_W = PANEL_W - 284;
-            std::string value = shown_value(row);
-            label value_label = text(arrows_l + value + arrows_r, PANEL_X + 250, y + 6, VALUE_W, 24, 16, row.editable ? TEXT : TEXT_DIM, overlay_element::right);
+            std::string value = !row.exit ? shown_value(row) : !selected ? "" : m_exit_armed ? "Cross again to exit" : "Cross (X)";
+            label value_label = text(arrows_l + value + arrows_r, PANEL_X + 250, y + 6, VALUE_W, 24, 16,
+                row.exit && m_exit_armed ? ACCENT : row.editable ? TEXT : TEXT_DIM, overlay_element::right);
             uint16_t value_w = 0, value_h = 0;
             value_label.measure_text(value_w, value_h, true);
             while (value_w > VALUE_W && !value.empty()) {

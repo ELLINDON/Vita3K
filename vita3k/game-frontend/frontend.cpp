@@ -600,8 +600,8 @@ int run(Profile &profile, int argc, char *argv[]) {
             LOG_WARN("{}.ini: {}", profile.id, line);
     }
     // The settings menu (settings_menu.h): F1, or Select held for a second on a gamepad, opens it
-    // over the paused game; F1, Esc or Circle closes it. Its changes are written to the settings file
-    // here, on the main thread, and the live ones applied.
+    // over the paused game; F1, Esc or Circle closes it, and its Exit page quits the game. Its changes
+    // are written to the settings file here, on the main thread, and the live ones applied.
     app::AppSessionController *session_ptr = nullptr; // set once the session exists, below
     std::shared_ptr<SettingsMenu> menu;
     bool select_held = false, select_used = false;
@@ -759,7 +759,14 @@ int run(Profile &profile, int argc, char *argv[]) {
         if (menu) {
             for (const auto &change : menu->take_changes())
                 apply_change(change);
-            if (menu->close_requested())
+            if (menu->exit_requested()) {
+                // the menu's Exit the game: quit as when the window is closed
+                LOG_INFO("Settings menu: exit the game");
+                close_menu();
+                SDL_Event quit{};
+                quit.type = SDL_EVENT_QUIT;
+                SDL_PushEvent(&quit);
+            } else if (menu->close_requested())
                 close_menu();
         }
         {

@@ -20,7 +20,7 @@
 // The in-game settings menu: an overlay over the paused game, built from the game's settings
 // declarations (settings.h), one page per section. It only edits its own copy of the values; the
 // changes go to the front end's main thread (take_changes), which writes the settings file and
-// applies the live ones (frontend.cpp).
+// applies the live ones (frontend.cpp). Its last page, Exit, quits the game (exit_requested).
 
 #include "settings.h"
 
@@ -44,6 +44,7 @@ public:
         std::string value;
         bool editable = true;
         bool needs_restart = false; // changed, and takes effect at the next start
+        bool exit = false; // the Exit page's row: Cross twice quits the game
     };
     struct Page {
         std::string title;
@@ -60,6 +61,8 @@ public:
     // Circle (or the front end's F1 / Esc): the menu wants to close
     bool close_requested() const { return m_close_requested.load(); }
     void request_close();
+    // Exit the game, confirmed: the front end quits as when the window is closed
+    bool exit_requested() const { return m_exit_requested.load(); }
 
 private:
     std::mutex m_mutex; // the pages and the selection (input thread and render thread)
@@ -68,6 +71,8 @@ private:
     size_t m_page = 0, m_row = 0, m_scroll = 0;
     std::vector<Change> m_changes;
     std::atomic<bool> m_close_requested{ false };
+    std::atomic<bool> m_exit_requested{ false };
+    bool m_exit_armed = false; // Cross pressed once on Exit the game; moving away disarms it
 
     void step(Row &row, int direction);
     void move_row(int direction);

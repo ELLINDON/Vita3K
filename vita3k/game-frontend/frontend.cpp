@@ -259,6 +259,12 @@ int run(Profile &profile, int argc, char *argv[]) {
 
     Root root_paths;
     app::init_paths(root_paths);
+#ifdef __APPLE__
+    // the setup's app bundle runs a copy of this executable from inside the bundle (macOS gives Game Mode
+    // only to a bundle's own executable) and names the playable folder in its Info.plist's LSEnvironment
+    if (const char *game_dir = getenv("VITA_RECOMPS_GAME_DIR"); game_dir && *game_dir)
+        root_paths.set_static_assets_path(fs_utils::utf8_to_path(game_dir) / "");
+#endif
     ctx.exe_dir = root_paths.get_static_assets_path();
     // our own config and log, apart from a Vita3K.exe in the same folder; the shader cache is shared.
     // Players 2 and up have theirs in a folder of their own.

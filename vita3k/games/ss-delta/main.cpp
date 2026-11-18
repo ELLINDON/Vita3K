@@ -151,12 +151,21 @@ game_frontend::IniLayout ini_layout() {
             "system.bin is changed once (a copy goes to ss-delta/save-backups/)." } } };
     game.settings[0].title = "Add-ons (DLC)";
     game.settings.push_back(language_setting());
+    // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
+    // rarely used for several copies on one machine, and with local its rooms never reached the network
+#ifdef _WIN32
+    const char *const network_default = "local";
+#else
+    const char *const network_default = "lan";
+#endif
     IniSection multiplayer{ "multiplayer", "",
         {
-            { "network", Kind::Choice, "local", 0, 0, { "local", "lan" },
-                "Ad Hoc Play (Librom, Network). local: copies of the game on this PC play together. lan: PCs in\n"
-                "one network play together, as in Vita3K: the copies find each other by UDP broadcasts on the\n"
-                "network adapter set by `adapter` (no address to enter); allow ss-delta.exe through the firewall.\n"
+            { "network", Kind::Choice, network_default, 0, 0, { "local", "lan" },
+                "Ad Hoc Play (Librom, Network). local (the default on Windows): copies of the game on this\n"
+                "machine play together. lan (the default on Linux and macOS): machines in one network play\n"
+                "together (Windows, Linux and macOS mixed), as in Vita3K: the copies find each other by UDP\n"
+                "broadcasts on the network adapter set by `adapter` (no address to enter). Windows: allow\n"
+                "ss-delta.exe through the firewall. macOS: allow Local Network access when it asks.\n"
                 "Start one copy per player: ss-delta.exe is player 1, and \"ss-delta.exe --player 2\"\n"
                 "(run-player2.bat) player 2, up to 4. Each player has a Vita user and saves of its own (player\n"
                 "1's are copied on its first start), and its log and config in ss-delta/player<N>/.\n"

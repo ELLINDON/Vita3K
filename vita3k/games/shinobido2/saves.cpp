@@ -21,6 +21,7 @@
 #include <util/log.h>
 #include <util/string_utils.h>
 
+#include <fmt/ranges.h>
 #include <miniz.h>
 
 #include <cctype>

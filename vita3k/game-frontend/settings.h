@@ -139,9 +139,15 @@ fs::path settings_file(const fs::path &dir, const std::string &id, int player);
 bool save_setting(const fs::path &file, const std::string &section, const std::string &key, const std::string &value, std::string &error);
 
 // reads <dir>/<id>.ini (written from the layout when missing), and for player N >= 2 also
-// <dir>/<id>-player<N>.ini, whose lines win
+// <dir>/<id>-player<N>.ini, whose lines win; then `overrides` ("section.key=value", the command
+// line's --set), which win over both, checked as the file's values are, and never saved
 Settings load_settings(const fs::path &dir, const std::string &id, const IniLayout &layout,
-    const std::vector<TouchBinding> &default_touches, int player = 1);
+    const std::vector<TouchBinding> &default_touches, int player = 1,
+    const std::vector<std::string> &overrides = {});
+
+// the command line's --help: every setting the layout declares, "section.key" with its default
+// and its choices or range
+std::string settings_help(const IniLayout &layout);
 
 // The shared declarations, for a game's layout. `exe` is the executable's name (for help texts).
 namespace layout {

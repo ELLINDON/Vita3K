@@ -227,8 +227,38 @@ bool save_setting(const fs::path &file, const std::string &section, const std::s
     return true;
 }
 
+std::string settings_help(const IniLayout &layout) {
+    std::string out;
+    for (const auto &section : layout.sections) {
+        if (section.free_keys)
+            continue;
+        for (const auto &spec : section.settings) {
+            std::string line = "  " + section.name + "." + spec.key;
+            std::string detail;
+            switch (spec.kind) {
+            case SettingSpec::Kind::Bool: detail = "true/false"; break;
+            case SettingSpec::Kind::Int: detail = fmt::format("{}..{}", spec.min, spec.max); break;
+            case SettingSpec::Kind::Float: detail = fmt::format("{}..{}", spec.min, spec.max); break;
+            case SettingSpec::Kind::Choice:
+                for (const auto &choice : spec.choices)
+                    detail += (detail.empty() ? "" : "/") + choice;
+                break;
+            case SettingSpec::Kind::Path: detail = "a path"; break;
+            case SettingSpec::Kind::Text: break;
+            }
+            const std::string value = effective_default(spec);
+            if (!detail.empty())
+                line += " (" + detail + ")";
+            if (!value.empty())
+                line += ", default " + value;
+            out += line + "\n";
+        }
+    }
+    return out;
+}
+
 Settings load_settings(const fs::path &dir, const std::string &id, const IniLayout &layout,
-    const std::vector<TouchBinding> &default_touches, int player) {
+    const std::vector<TouchBinding> &default_touches, int player, const std::vector<std::string> &overrides) {
     Settings out;
     out.vita_fs = dir / "fs" / "";
     out.recompiled = dir;
@@ -279,6 +309,21 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
             else
                 raw[section + "." + key] = value;
         }
+    }
+
+    // the command line's --set section.key=value, over the files
+    for (const auto &text : overrides) {
+        const auto eq = text.find('=');
+        const std::string key = string_utils::tolower(trim(text.substr(0, eq)));
+        const auto dot = key.find('.');
+        const auto it = dot == std::string::npos ? sections.end() : sections.find(key.substr(0, dot));
+        const bool declared = it != sections.end() && std::any_of(it->second->settings.begin(), it->second->settings.end(),
+                                                         [&](const SettingSpec &spec) { return key == it->second->name + "." + spec.key; });
+        if (eq == std::string::npos || !declared) {
+            out.warnings.push_back("--set " + text + " (no such setting; --help lists them)");
+            continue;
+        }
+        raw[key] = trim(text.substr(eq + 1));
     }
 
     // the declared settings: the file's value if it is valid, otherwise the default

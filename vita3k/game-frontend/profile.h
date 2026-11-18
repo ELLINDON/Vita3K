@@ -92,6 +92,8 @@ struct Profile {
     bool multiplayer = false;
     // the executable has an icon resource with id 101 (its .rc); the window then uses it
     bool icon_resource = false;
+    // the game's own command-line options (hooks.parse_arg), for --help: lines as in its usage list
+    std::string usage;
     Hooks hooks;
 };
 

@@ -20,6 +20,7 @@
 // <id>.ini next to the executable. The recompiled modules (ssd_aot_<module>.dll, generated locally
 // from the player's own dump) are loaded from the same folder.
 
+#include "importer.h"
 #include "profile.h"
 
 #include "../archive.h"
@@ -66,6 +67,7 @@
 #include <array>
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <mutex>
@@ -193,24 +195,49 @@ struct InstallItem {
 
 } // namespace
 
+// the command line (--help prints it, with every setting)
+constexpr const char *USAGE = R"(The game builds itself the first time it starts: its importer (setup/) asks for
+your own dump of the game, then the game starts. Everything stays in the game's folder.
+
+  --game <folder>             the game's folder (default: the executable's; macOS: the one holding
+                              the app)
+  --install                   open the importer even though the game is built (another dump, an
+                              update), then play
+  --dump <zip|vpk|folder|pkg> [--license <work.bin|rif> | --zrif <zRIF>]
+                              build the game from this dump without the importer's window (repeat
+                              for its update and add-ons), then play
+  --build-only                build the game if it isn't (or with --install, --dump), then quit
+                              instead of playing (exit code 0: built)
+  --add-to-steam              Linux and the Steam Deck: add the game to Steam (Steam must be
+                              running), then quit
+  --accept-microsoft-license  (Windows, with --dump) accept Microsoft's licence for the compiler's
+                              C++ runtime and Windows SDK, which the importer downloads
+  --shortcut, --steam         (with --dump) a desktop shortcut (Windows), the game in Applications
+                              (macOS) or the applications menu (Linux); add it to Steam (Linux)
+  --cache <folder>, --jobs <n>
+                              (with --dump) keep the importer's downloads in that folder for the
+                              next time; compile with that many jobs
+  --set <section.key=value>   a setting for this run only, over the settings file (the list below)
+  --fullscreen, --windowed    the same as --set display.fullscreen=true / false
+  --player <1-4>              (games with Ad Hoc Play) the copy of another player, with a Vita user
+                              (saves), config and log of its own
+  --title-id <id>             (games released in several regions) that region's game, when more
+                              than one is installed
+  --vita-fs <folder>          the Vita file system instead of the settings file's
+  --write-ini <file>          write the default settings file there, then quit
+  --help                      this list
+For the importer and scripts: --install-firmware <PUP>, --install-content <dump> [--license ...|
+--zrif ...] (install into the Vita file system, then quit), --dump-elfs <seconds> (run unseen,
+writing every module as loaded to <id>/elfdumps/, then quit).
+)";
+
 int run(Profile &profile, int argc, char *argv[]) {
-    // command line:
-    //   --install-firmware <PUP>     install a firmware update file into the Vita file system
-    //   --install <zip|vpk|folder|pkg> [--license <work.bin|rif> | --zrif <zRIF>]
-    //                                install a game dump (app, patch, DLC) into it; a pkg needs its
-    //                                licence, except a patch or add-on whose game's licence is there
-    //   --dump-elfs <seconds>        run the game that long, writing every module as loaded to
-    //                                <id>/elfdumps/ (the input for recompiling), then quit; the
-    //                                window stays hidden and the sound off (a setup's step)
-    //   --vita-fs <folder>           the Vita file system to use instead of the settings file's
-    //   --title-id <id>              (games released in several regions) run that region's game when
-    //                                more than one is installed
-    //   --write-ini <file>           write the default settings file there and quit
-    //   --player <1-4>               (games with Ad Hoc Play) a copy of the game for another player,
-    //                                with its own Vita user (saves), config and log (<id>/player<N>/);
-    //                                (other games) a copy with its own window, input pipe, config
-    //                                and log, the same Vita user (for test runs in parallel)
-    //   and the game's own options (its Hooks::parse_arg)
+    // the command line: USAGE above, and the game's own options (its Hooks::parse_arg)
+#ifdef __APPLE__
+    // a downloaded app Gatekeeper runs from a translocated copy starts again from its own folder
+    if (relaunch_from_original_location(argc, argv))
+        return 0;
+#endif
     Context ctx;
     for (int i = 1; i < argc; i++)
         ctx.args.emplace_back(argv[i]);
@@ -221,16 +248,47 @@ int run(Profile &profile, int argc, char *argv[]) {
     double dump_elfs_seconds = 0;
     std::string vita_fs_override;
     std::string title_id_override;
+    std::string game_dir_override;
+    std::vector<std::string> importer_args; // --dump parts, as the importer's --install parts
+    std::vector<std::string> importer_options; // the importer's own options, passed on to it
+    std::vector<std::string> overrides; // --set
+    bool open_importer = false, add_to_steam = false, help = false, build_only = false;
+    bool last_part_is_dump = false; // a --license or --zrif belongs to the part before it
     std::vector<std::string> unknown_args;
     for (size_t i = 0; i < ctx.args.size(); i++) {
         const std::string &arg = ctx.args[i];
         const bool has_value = i + 1 < ctx.args.size();
         if (arg == "--install-firmware" && has_value)
             install_firmware.push_back(ctx.args[++i]);
-        else if (arg == "--install" && has_value)
+        else if (arg == "--install-content" && has_value) {
             install_content.push_back({ ctx.args[++i] });
-        else if ((arg == "--license" || arg == "--zrif") && has_value && !install_content.empty())
+            last_part_is_dump = false;
+        } else if (arg == "--dump" && has_value) {
+            importer_args.insert(importer_args.end(), { "--install", fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[++i]))) });
+            last_part_is_dump = true;
+        } else if ((arg == "--license" || arg == "--zrif") && has_value && last_part_is_dump) {
+            const std::string &value = ctx.args[++i];
+            importer_args.insert(importer_args.end(), { arg, arg == "--license" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(value))) : value });
+        } else if ((arg == "--license" || arg == "--zrif") && has_value && !install_content.empty())
             (arg == "--license" ? install_content.back().license : install_content.back().zrif) = ctx.args[++i];
+        else if (arg == "--install")
+            open_importer = true;
+        else if (arg == "--accept-microsoft-license" || arg == "--shortcut" || arg == "--steam")
+            importer_options.push_back(arg);
+        else if ((arg == "--cache" || arg == "--jobs") && has_value)
+            importer_options.insert(importer_options.end(), { arg, arg == "--cache" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[i + 1]))) : ctx.args[i + 1] }), i++;
+        else if (arg == "--add-to-steam")
+            add_to_steam = true;
+        else if (arg == "--build-only")
+            build_only = true;
+        else if (arg == "--game" && has_value)
+            game_dir_override = ctx.args[++i];
+        else if (arg == "--set" && has_value)
+            overrides.push_back(ctx.args[++i]);
+        else if (arg == "--fullscreen" || arg == "--windowed")
+            overrides.push_back(arg == "--fullscreen" ? "display.fullscreen=true" : "display.fullscreen=false");
+        else if (arg == "--help" || arg == "-h" || arg == "/?")
+            help = true;
         else if (arg == "--dump-elfs" && has_value)
             dump_elfs_seconds = std::atof(ctx.args[++i].c_str());
         else if (arg == "--vita-fs" && has_value)
@@ -257,27 +315,91 @@ int run(Profile &profile, int argc, char *argv[]) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ctx.window_name.c_str(), message.c_str(), nullptr);
     };
 
+    if (help) {
+        attach_parent_console();
+        fmt::print("{} ({})\n\n{}{}\nSettings (--set section.key=value; keys and sections also in {}.ini):\n{}",
+            profile.name, profile.id, USAGE, profile.usage.empty() ? "" : "\n" + profile.usage, profile.id,
+            settings_help(profile.ini));
+        std::fflush(stdout);
+        return 0;
+    }
+
+    // Everything in the game's folder (ss-delta D22): --game, else the folder an app copy elsewhere
+    // names (macOS ~/Applications: LSEnvironment), else the executable's (macOS: the one holding the
+    // app, SDL_FILESYSTEM_BASE_DIR_TYPE). Nothing in the user's profile (no SDL_GetPrefPath).
+    fs::path game_dir;
+    if (!game_dir_override.empty())
+        game_dir = fs::absolute(fs_utils::utf8_to_path(game_dir_override));
+    else if (const char *env = std::getenv("VITA_RECOMPS_GAME_DIR"); env && *env)
+        game_dir = fs_utils::utf8_to_path(env);
+    else if (const char *base = SDL_GetBasePath())
+        game_dir = fs_utils::utf8_to_path(base);
+    // (Boost keeps a trailing separator as a last element ".")
+    game_dir = game_dir.lexically_normal();
+    while ((game_dir.filename() == "." || game_dir.filename().empty()) && game_dir.has_parent_path() && game_dir.parent_path() != game_dir)
+        game_dir = game_dir.parent_path();
+    game_dir /= "";
     Root root_paths;
-    app::init_paths(root_paths);
-#ifdef __APPLE__
-    // the setup's app bundle runs a copy of this executable from inside the bundle (macOS gives Game Mode
-    // only to a bundle's own executable) and names the playable folder in its Info.plist's LSEnvironment
-    if (const char *game_dir = getenv("VITA_RECOMPS_GAME_DIR"); game_dir && *game_dir)
-        root_paths.set_static_assets_path(fs_utils::utf8_to_path(game_dir) / "");
-#endif
-    ctx.exe_dir = root_paths.get_static_assets_path();
-    // our own config and log, apart from a Vita3K.exe in the same folder; the shader cache is shared.
-    // Players 2 and up have theirs in a folder of their own.
+    root_paths.set_static_assets_path(game_dir);
+    root_paths.set_cache_path(game_dir / "cache" / "");
+    root_paths.set_patch_path(game_dir / "patch" / "");
+    ctx.exe_dir = game_dir;
+    // our own config and log, apart from a Vita3K.exe in the same folder. Players 2 and up have theirs
+    // in a folder of their own.
     ctx.data_dir = ctx.player == 1 ? ctx.exe_dir / profile.id / "" : ctx.exe_dir / profile.id / fmt::format("player{}", ctx.player) / "";
     fs::create_directories(ctx.data_dir);
     root_paths.set_config_path(ctx.data_dir);
     root_paths.set_log_path(ctx.data_dir);
     root_paths.set_shared_path(ctx.data_dir);
 
-    Settings settings = load_settings(ctx.exe_dir, profile.id, profile.ini, profile.default_touches, ctx.player);
-    if (!vita_fs_override.empty())
-        settings.vita_fs = fs_utils::utf8_to_path(vita_fs_override) / "";
+    const auto read_settings = [&] {
+        Settings s = load_settings(ctx.exe_dir, profile.id, profile.ini, profile.default_touches, ctx.player, overrides);
+        if (!vita_fs_override.empty())
+            s.vita_fs = fs_utils::utf8_to_path(vita_fs_override) / "";
+        return s;
+    };
+    Settings settings = read_settings();
+
+    // Not built yet (or --install, --dump, --add-to-steam): the importer in setup/, waited for. The
+    // importer's own runs of this executable (--install-content, --dump-elfs) never get here.
+    if (install_firmware.empty() && install_content.empty() && dump_elfs_seconds <= 0) {
+        const auto built = [&] {
+            if (fs::exists(settings.vita_fs / "ux0" / "app" / profile.title_id / "eboot.bin"))
+                return true;
+            return std::any_of(profile.other_title_ids.begin(), profile.other_title_ids.end(),
+                [&](const std::string &id) { return fs::exists(settings.vita_fs / "ux0" / "app" / id / "eboot.bin"); });
+        };
+        if (add_to_steam || open_importer || !importer_args.empty() || !built()) {
+            if (has_importer(game_dir)) {
+                const bool console = add_to_steam || !importer_args.empty();
+                if (console)
+                    attach_parent_console();
+                std::vector<std::string> args = add_to_steam ? std::vector<std::string>{ "--add-to-steam" } : importer_args;
+                if (!add_to_steam)
+                    args.insert(args.end(), importer_options.begin(), importer_options.end());
+                const int code = run_importer(game_dir, own_executable(), args, console);
+                if (add_to_steam || code != 0) {
+                    if (code < 0)
+                        fail(fmt::format("The importer in {} could not be started.", fs_utils::path_to_utf8(game_dir / "setup")));
+                    // 2: built, but the importer's window was closed without Play
+                    return code == 2 ? 0 : code < 0 ? 1 : code;
+                }
+                if (build_only)
+                    return 0;
+                settings = read_settings();
+            } else if (add_to_steam || open_importer || !importer_args.empty()) {
+                fail(fmt::format("{} has no importer (setup/): download the release again to build the game.",
+                    fs_utils::path_to_utf8(game_dir)));
+                return 1;
+            }
+        }
+        if (build_only)
+            return built() ? 0 : 1;
+    }
     root_paths.set_vita_fs_path(settings.vita_fs);
+    // (Vita3K reads both without checking they exist)
+    fs::create_directories(root_paths.get_cache_path());
+    fs::create_directories(root_paths.get_patch_path());
     ctx.settings = &settings;
 
     if (logging::init(root_paths, false) != Success)

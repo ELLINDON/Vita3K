@@ -339,6 +339,12 @@ int main(int argc, char *argv[]) {
     profile.default_touches = { { "black_rite", 56, 494, "F", "lefttrigger" } };
     profile.multiplayer = true;
     profile.icon_resource = true;
+    profile.usage = "Saves (then quit):\n"
+                    "  --import-save <folder|zip>  copy a decrypted Vita save (e.g. from a Vita) in, keeping the\n"
+                    "                              old one in ss-delta/save-backups/\n"
+                    "  --export-save <folder>      copy a save out\n"
+                    "  --slot <1-3>                the game's save slot for the two above (default 1)\n"
+                    "  --quiet                     no message box for the two above (the result is in the log)\n";
 
     auto &hooks = profile.hooks;
     hooks.parse_arg = [&](game_frontend::Context &, const std::vector<std::string> &args, size_t &i) {

@@ -39,9 +39,6 @@
 #include <emuenv/state.h>
 #include <gxm/state.h>
 #include <ime/functions.h>
-#ifdef __ANDROID__
-#include <ime/keyboard.h>
-#endif
 #include <io/functions.h>
 #include <io/state.h>
 #include <kernel/state.h>
@@ -80,6 +77,10 @@
 #include <vector>
 
 namespace game_frontend {
+
+#ifdef __ANDROID__
+void android_window_created(SDL_Window *window); // android.cpp
+#endif
 
 namespace {
 
@@ -711,8 +712,8 @@ int run(Profile &profile, int argc, char *argv[]) {
             return;
         SDL_SetWindowTitle(window, ctx.window_name.c_str());
 #ifdef __ANDROID__
-        // the soft keyboard for the game's text dialogs (game-frontend/android.cpp)
-        ime::set_sdl_window(window);
+        // the soft keyboard for the game's text dialogs, the log flush on pause (android.cpp)
+        android_window_created(window);
 #endif
         // the game's own icon, from the player's installed copy. Not on macOS: there a window has no
         // icon, and SDL would replace the Dock icon, the app bundle's (shaped as a macOS icon), with

@@ -342,8 +342,21 @@ bool handle_access_violation(MemState &state, uint8_t *addr, bool write) noexcep
         // Apple Silicon), so macOS checks the page's protection before calling it unhandled.
         if (page_accessible(addr, write))
             return true;
+        const Address page = align_down(vaddr, state.host_page_size);
+#ifndef __APPLE__
+        // Elsewhere the page's protection isn't read, but tracked regions cover whole host pages
+        // (add_protect), so a page no segment overlaps is one that the other thread has just
+        // unprotected: retry. Seen on Android with NativeCPU (ss-delta 09-android): the same address
+        // logged twice within milliseconds, the two threads that waited behind the first. (The
+        // unprotect is a no-op then; it only guards against a page left protected by mistake.)
+        const auto overlapping = state.protect_tree.lower_bound(page + state.host_page_size - 1);
+        if (overlapping == state.protect_tree.end() || overlapping->first + overlapping->second.size <= page) {
+            unprotect_inner(state, page, state.host_page_size);
+            return true;
+        }
+#endif
         // HACK: keep going
-        unprotect_inner(state, align_down(vaddr, state.host_page_size), state.host_page_size);
+        unprotect_inner(state, page, state.host_page_size);
         LOG_CRITICAL("Unhandled write protected region was valid. Address=0x{:X}", vaddr);
         return true;
     }

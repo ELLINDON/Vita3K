@@ -27,13 +27,46 @@
 #include <ime/keyboard.h>
 #include <renderer/vulkan/screen_renderer.h>
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keyboard.h>
+#include <spdlog/spdlog.h>
 
 #include <jni.h>
 
 namespace {
 SDL_Window *s_window = nullptr;
+
+// Android may kill a paused app without another word (swiped away from the recent apps): the log
+// is written on a thread of its own, so its last lines are flushed when the app leaves the screen.
+// An event watch, because SDL blocks the game's event loop while the app is paused.
+bool SDLCALL flush_logs_on_pause(void *, SDL_Event *event) {
+    switch (event->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+    case SDL_EVENT_TERMINATING:
+    case SDL_EVENT_LOW_MEMORY:
+        spdlog::apply_all([](const std::shared_ptr<spdlog::logger> &logger) { logger->flush(); });
+        break;
+    default:
+        break;
+    }
+    return true;
+}
 } // namespace
+
+namespace game_frontend {
+
+// the frontend's window exists: the soft keyboard's window, the log flush on pause
+void android_window_created(SDL_Window *window) {
+    ime::set_sdl_window(window);
+    static bool watching = false;
+    if (!watching) {
+        SDL_AddEventWatch(flush_logs_on_pause, nullptr);
+        watching = true;
+    }
+}
+
+} // namespace game_frontend
 
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_vitarecomps_frontend_GameSurface_setSurfaceStatus(JNIEnv *, jobject, jboolean surface_present) {

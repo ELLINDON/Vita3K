@@ -475,7 +475,8 @@ endif() # NOT VITA3K_GAMES_ONLY
 # the shared frontend is a library, and each game is a small executable with its profile
 # (games/<id>/main.cpp). They run from the folder Vita3K.exe is built into, whose data and
 # shaders-builtin they use. Windows, Linux and macOS (a plain executable, not a bundle, for now).
-if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+# Android: a shared library per game (lib<id>.so) that the game's APK loads (ss-delta 09-android).
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR ANDROID)
 	add_library(game-frontend STATIC
 		game-frontend/frontend.cpp game-frontend/profile.h game-frontend/settings.cpp game-frontend/settings.h
 		game-frontend/input.cpp game-frontend/input.h
@@ -489,6 +490,12 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
 	if(APPLE)
 		target_link_libraries(game-frontend PUBLIC "-framework CoreFoundation")
 	endif()
+	if(ANDROID)
+		# the glue to the game's Java side: the surface, the soft keyboard (in place of Vita3K's own
+		# Android app's android/jni)
+		target_sources(game-frontend PRIVATE game-frontend/android.cpp)
+		target_link_libraries(game-frontend PUBLIC android log)
+	endif()
 	if(USE_DISCORD_RICH_PRESENCE)
 		target_link_libraries(game-frontend PUBLIC discord-rpc)
 	endif()
@@ -499,6 +506,23 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
 		# that ask hybrid laptops' drivers for the discrete GPU) in the executable itself: nothing
 		# references them, so from the static library the linker leaves them out
 		set(sources ${ARGN} performance.cpp)
+		if(ANDROID)
+			# lib<id>.so: SDL's Java activity loads it and calls its SDL_main (<SDL3/SDL_main.h> turns
+			# the game's main into it). Its data and shaders-builtin are the APK's assets.
+			list(FILTER sources EXCLUDE REGEX "\.(ico|rc)$")
+			add_library(${target} SHARED ${sources})
+			target_link_libraries(${target} PRIVATE game-frontend)
+			set_target_properties(${target} PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+			# libadrenotools' hook libraries beside it: the custom driver loader ([debug] gpu_driver)
+			# loads them from the app's native library folder
+			foreach(hook hook_impl main_hook file_redirect_hook gsl_alloc_hook)
+				if(TARGET ${hook})
+					add_dependencies(${target} ${hook})
+					set_target_properties(${hook} PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+				endif()
+			endforeach()
+			return()
+		endif()
 		if(WIN32)
 			add_executable(${target} WIN32 ${sources} util/src/vc_runtime_checker.cpp resource.h Windows.manifest)
 		else()

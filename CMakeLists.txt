@@ -2,9 +2,13 @@ cmake_minimum_required(VERSION 3.22)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
 	set(ANDROID 1)
-	set(VCPKG_TARGET_ANDROID 1)
-	# this file must be included before everything else
-	include("cmake/vcpkg_android.cmake")
+	# Vita3K's Android app takes Boost, OpenSSL and curl from vcpkg. The single-game libraries
+	# (VITA3K_GAMES_ONLY) build them from their sources instead, as on Linux (external/CMakeLists.txt)
+	if(NOT VITA3K_GAMES_ONLY)
+		set(VCPKG_TARGET_ANDROID 1)
+		# this file must be included before everything else
+		include("cmake/vcpkg_android.cmake")
+	endif()
 endif()
 
 project(Vita3K)
@@ -38,6 +42,18 @@ if(ANDROID)
 
 	string(APPEND CMAKE_CXX_FLAGS " -Wl,-Bsymbolic -Wno-unused-command-line-argument")
 	string(APPEND CMAKE_C_FLAGS " -Wl,-Bsymbolic -Wno-unused-command-line-argument")
+
+	if(VITA3K_GAMES_ONLY)
+		# zlib is part of the platform: the NDK's libz.so (vcpkg brings one for Vita3K's app). With
+		# CMAKE_SYSROOT cleared, find_package(ZLIB) can't find it, and psvpfstools would fall back to a
+		# build in its source folder. Its headers from a folder of their own: the sysroot's whole
+		# include folder on the command line would come before libc++'s and break its #include_next
+		get_filename_component(ndk_sysroot "${CMAKE_C_COMPILER}/../../sysroot" ABSOLUTE)
+		file(COPY "${ndk_sysroot}/usr/include/zlib.h" "${ndk_sysroot}/usr/include/zconf.h"
+			DESTINATION "${CMAKE_BINARY_DIR}/ndk-zlib/include")
+		set(ZLIB_INCLUDE_DIR "${CMAKE_BINARY_DIR}/ndk-zlib/include" CACHE PATH "" FORCE)
+		set(ZLIB_LIBRARY "${ndk_sysroot}/usr/lib/aarch64-linux-android/${ANDROID_PLATFORM_LEVEL}/libz.so" CACHE FILEPATH "" FORCE)
+	endif()
 
 	if(CMAKE_BUILD_TYPE STREQUAL "Release")
 		set(CMAKE_C_VISIBILITY_PRESET hidden)
@@ -123,9 +139,15 @@ macro(b2_build)
 			OUTPUT_QUIET
 		)
 	elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+		# b2 runs on the build machine: for Android, the host's gcc builds it, not the NDK's clang
+		if(ANDROID)
+			set(b2_bootstrap_toolset gcc)
+		else()
+			set(b2_bootstrap_toolset ${BOOST_TOOLSET})
+		endif()
 		execute_process(
 			COMMAND chmod +x ${BOOST_SOURCEDIR}/tools/build/src/engine/build.sh
-			COMMAND sh ${BOOST_SOURCEDIR}/bootstrap.sh --with-toolset=${BOOST_TOOLSET}
+			COMMAND sh ${BOOST_SOURCEDIR}/bootstrap.sh --with-toolset=${b2_bootstrap_toolset}
 			WORKING_DIRECTORY ${BOOST_SOURCEDIR}
 			OUTPUT_QUIET
 		)
@@ -154,6 +176,18 @@ macro(boost_compile)
 		# Boost, which upstream's CI uses, is built that way already)
 		execute_process(
 			COMMAND ${b2_cmd_line_common} --ignore-site-config toolset=${BOOST_TOOLSET} cxxflags=-fPIC stage
+			WORKING_DIRECTORY ${BOOST_SOURCEDIR}
+			OUTPUT_QUIET
+		)
+	elseif(ANDROID)
+		# the single-game libraries (arm64-v8a): the NDK's clang for the target, named in a b2 user
+		# config, position-independent for the shared library
+		set(boost_android_target "aarch64-linux-android${ANDROID_PLATFORM_LEVEL}")
+		file(WRITE "${BOOST_INSTALLDIR}/android-config.jam"
+			"using clang : android : ${CMAKE_CXX_COMPILER} : <compileflags>--target=${boost_android_target} <linkflags>--target=${boost_android_target} <archiver>${CMAKE_AR} <ranlib>${CMAKE_RANLIB} ;\n")
+		execute_process(
+			COMMAND ${b2_cmd_line_common} --ignore-site-config --user-config=${BOOST_INSTALLDIR}/android-config.jam
+				toolset=clang-android target-os=android architecture=arm address-model=64 link=static cxxflags=-fPIC stage
 			WORKING_DIRECTORY ${BOOST_SOURCEDIR}
 			OUTPUT_QUIET
 		)
@@ -200,7 +234,7 @@ macro(get_boost)
 			set(BOOST_LIBRARYDIR "${BOOST_INSTALLDIR}/lib")                 # find_package(Boost ...) hint
 
 			# Find Boost again to check for a existing compilation of the custom distribution
-			find_package(Boost 1.81 COMPONENTS ${BOOST_MODULES_TO_FIND} PATHS ${BOOST_INSTALLDIR} NO_DEFAULT_PATH)
+			find_package(Boost 1.81 COMPONENTS ${BOOST_MODULES_TO_FIND} PATHS ${BOOST_INSTALLDIR} NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 			# If no build of the custom distribution is found, compile it
 			if(NOT Boost_FOUND)
@@ -261,7 +295,7 @@ macro(get_boost)
 				boost_compile()
 
 				# Find Boost again
-				find_package(Boost 1.81 COMPONENTS ${BOOST_MODULES_TO_FIND} PATHS ${BOOST_INSTALLDIR} NO_DEFAULT_PATH REQUIRED)
+				find_package(Boost 1.81 COMPONENTS ${BOOST_MODULES_TO_FIND} PATHS ${BOOST_INSTALLDIR} NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH REQUIRED)
 			else()
 				message(STATUS "Custom Boost distribution found in ${BOOST_INSTALLDIR}")
 			endif()

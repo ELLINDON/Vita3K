@@ -292,7 +292,7 @@ endif()
 # Linux they link the pinned source releases of OpenSSL and curl statically (OpenSSL as on macOS):
 # the Steam Runtime SDK has OpenSSL 1.1, SteamOS has no libcurl-gnutls outside the Steam runtime,
 # and the player's system is asked for neither.
-if(VITA3K_GAMES_ONLY AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(VITA3K_GAMES_ONLY AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID))
 	set(VITA3K_STATIC_OPENSSL ON)
 endif()
 if(NOT FORCE_BUILD_OPENSSL_MAC AND NOT (MSVC AND VITA3K_GAMES_ONLY) AND NOT VITA3K_STATIC_OPENSSL)
@@ -336,7 +336,18 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 
 		if (NOT EXISTS "${CMAKE_BINARY_DIR}/external/openssl/libssl.a" OR NOT EXISTS "${CMAKE_BINARY_DIR}/external/openssl/libcrypto.a")
 			message(STATUS "Building OpenSSL@4...")
-			if(VITA3K_STATIC_OPENSSL)
+			if(VITA3K_STATIC_OPENSSL AND ANDROID)
+				# OpenSSL's own Android target finds the NDK's clang through ANDROID_NDK_ROOT and PATH
+				get_filename_component(ndk_clang_dir "${CMAKE_C_COMPILER}" DIRECTORY)
+				set(openssl_env ${CMAKE_COMMAND} -E env "ANDROID_NDK_ROOT=${ANDROID_NDK}"
+					"PATH=${ndk_clang_dir}:$ENV{PATH}")
+				execute_process(COMMAND ${openssl_env} perl Configure android-arm64 -D__ANDROID_API__=${ANDROID_PLATFORM_LEVEL}
+					no-shared no-tests no-docs -fPIC
+					WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl")
+				cmake_host_system_information(RESULT openssl_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+				execute_process(COMMAND ${openssl_env} make -j${openssl_jobs} build_libs
+					WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl" OUTPUT_QUIET)
+			elseif(VITA3K_STATIC_OPENSSL)
 				# static libraries only, position-independent (the executables are PIE)
 				execute_process(COMMAND perl Configure linux-${CMAKE_SYSTEM_PROCESSOR} no-shared no-tests no-docs -fPIC
 					WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl")
@@ -363,6 +374,12 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 
 		set(OPENSSL_ROOT_DIR "${CMAKE_BINARY_DIR}/external/openssl")
 		set(OPENSSL_USE_STATIC_LIBS TRUE)
+		if(ANDROID)
+			# the NDK's toolchain searches only its sysroot: name the build's files directly
+			set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include" CACHE PATH "" FORCE)
+			set(OPENSSL_SSL_LIBRARY "${OPENSSL_ROOT_DIR}/libssl.a" CACHE FILEPATH "" FORCE)
+			set(OPENSSL_CRYPTO_LIBRARY "${OPENSSL_ROOT_DIR}/libcrypto.a" CACHE FILEPATH "" FORCE)
+		endif()
 	endif()
 	find_package(OpenSSL REQUIRED)
 endif()

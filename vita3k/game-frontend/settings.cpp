@@ -378,6 +378,8 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
     }
     if (declared("debug.high_accuracy"))
         out.high_accuracy = values.get_bool("debug.high_accuracy");
+    if (declared("debug.gpu_driver"))
+        out.gpu_driver = values.get("debug.gpu_driver");
     out.keyboard = values.section("keyboard");
     out.gamepad = values.section("gamepad");
 
@@ -511,6 +513,12 @@ IniSection debug(const std::string &id) {
                 "latent: none waits, the CPU reads a frame-old copy. off: no copy (effects may break)." },
             { "high_accuracy", Kind::Bool, "true", 0, 0, {},
                 "Vita3K's high-accuracy rendering (steady smoke). false is faster but can flicker." },
+#ifdef __ANDROID__
+            { "gpu_driver", Kind::Text, "", 0, 0, {},
+                "A Vulkan driver in place of the system's: the name of a folder in the app's files/driver/\n"
+                "holding a libadrenotools package (meta.json and the driver's .so), such as a Turnip build.\n"
+                "Empty: the system's driver. One that fails to load falls back to the system's." },
+#endif
         } };
 }
 

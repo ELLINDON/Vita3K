@@ -32,6 +32,9 @@ struct VKState;
 
 #ifdef __ANDROID__
 bool has_android_surface();
+// what the Java SurfaceView reports: Vita3K's app through its JNI callback, a single-game
+// library through its own (game-frontend/android.cpp)
+void set_android_surface(bool present);
 #endif
 
 class ScreenRenderer {

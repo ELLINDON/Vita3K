@@ -1,0 +1,78 @@
+// A game's APK on the single-game frontend (ss-delta 09-android). The native code is built apart, by
+// CMake with the NDK (lib<game>.so, add_game in vita3k/CMakeLists.txt), and taken from jniLibsDir;
+// this project packs it with SDL's Java side, the frontend's activity, and Vita3K's data and
+// shaders-builtin as assets. Properties (-P...):
+//   game           the game's id and library name (ss-delta: libss-delta.so)
+//   applicationId  the Android package (io.github.vitarecomps.<game>)
+//   appName        the name under the icon
+//   versionName, versionCode
+//   jniLibsDir     a folder holding arm64-v8a/lib<game>.so
+plugins {
+	id 'com.android.application' version '9.2.1'
+}
+
+def prop = { String name, String fallback -> project.findProperty(name)?.toString() ?: fallback }
+def game = prop('game', 'ss-delta')
+def fork = file('../../..')
+
+android {
+	namespace = 'io.github.vitarecomps.frontend'
+	compileSdk = 35
+	buildFeatures {
+		resValues = true
+	}
+
+	defaultConfig {
+		applicationId = prop('applicationId', "io.github.vitarecomps.${game.replace('-', '')}")
+		minSdk = 28
+		targetSdk = 35
+		versionCode = prop('versionCode', '1').toInteger()
+		versionName = prop('versionName', '0.0.0')
+		resValue 'string', 'app_name', prop('appName', game)
+		manifestPlaceholders = [gameLibrary: game]
+		ndk {
+			abiFilters 'arm64-v8a'
+		}
+	}
+
+	buildTypes {
+		debug {
+			// run-as for the test tools (adb: the driver package, the modules, logs)
+			debuggable = true
+			jniDebuggable = true
+		}
+		release {
+			minifyEnabled = false
+			signingConfig = signingConfigs.debug
+		}
+	}
+
+	compileOptions {
+		sourceCompatibility JavaVersion.VERSION_17
+		targetCompatibility JavaVersion.VERSION_17
+	}
+
+	sourceSets {
+		main {
+			java.srcDirs = ['src/main/java', "${fork}/external/sdl/android-project/app/src/main/java"]
+			jniLibs.srcDirs = [prop('jniLibsDir', 'jniLibs')]
+			assets.srcDirs = [layout.buildDirectory.dir('game-assets')]
+		}
+	}
+
+	packaging {
+		jniLibs {
+			// extracted to the app's native library folder, as Vita3K's app does
+			useLegacyPackaging = true
+		}
+	}
+}
+
+// data/ and shaders-builtin/ under the APK's assets, where SDL_IOFromFile finds them by their
+// relative paths (the frontend's static assets path is empty on Android)
+def copyGameAssets = tasks.register('copyGameAssets', Sync) {
+	from("${fork}/data") { into 'data' }
+	from("${fork}/vita3k/shaders-builtin") { into 'shaders-builtin' }
+	into layout.buildDirectory.dir('game-assets')
+}
+tasks.named('preBuild') { dependsOn copyGameAssets }

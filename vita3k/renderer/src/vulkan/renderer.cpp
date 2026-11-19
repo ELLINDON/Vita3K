@@ -765,6 +765,10 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             support_shader_interlock = static_cast<bool>(props.get<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>().fragmentShaderSampleInterlock);
             features.support_shader_interlock = support_shader_interlock;
         }
+        // which way the shaders read the framebuffer (programmable blending): late_init logs when
+        // interlock is used; the other two ways were silent (ss-delta 09-android: Adreno drivers)
+        LOG_INFO("Framebuffer reads: raster-order attachment access {}, shader interlock {}",
+            support_rasterized_order_access ? "yes" : "no", support_shader_interlock ? "yes" : "no");
 
         vk::StructureChain<vk::DeviceCreateInfo,
             vk::PhysicalDeviceBufferDeviceAddressFeatures,

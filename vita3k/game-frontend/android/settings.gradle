@@ -1,0 +1,18 @@
+// The single-game frontend's APK (ss-delta 09-android): one project for every game, built with the
+// game's properties (build.gradle). Run with Vita3K's Gradle wrapper:
+//   android/gradlew -p vita3k/game-frontend/android assembleDebug -Pgame=ss-delta ...
+pluginManagement {
+	repositories {
+		gradlePluginPortal()
+		google()
+		mavenCentral()
+	}
+}
+dependencyResolutionManagement {
+	repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+	repositories {
+		google()
+		mavenCentral()
+	}
+}
+rootProject.name = "game-frontend"

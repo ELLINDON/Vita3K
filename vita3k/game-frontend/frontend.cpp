@@ -39,6 +39,9 @@
 #include <emuenv/state.h>
 #include <gxm/state.h>
 #include <ime/functions.h>
+#ifdef __ANDROID__
+#include <ime/keyboard.h>
+#endif
 #include <io/functions.h>
 #include <io/state.h>
 #include <kernel/state.h>
@@ -334,15 +337,27 @@ int run(Profile &profile, int argc, char *argv[]) {
         game_dir = fs::absolute(fs_utils::utf8_to_path(game_dir_override));
     else if (const char *env = std::getenv("VITA_RECOMPS_GAME_DIR"); env && *env)
         game_dir = fs_utils::utf8_to_path(env);
+#ifdef __ANDROID__
+    // Android: the app's folder on shared storage (Android/data/<package>/files), which a PC reaches
+    // over USB or adb (ss-delta 09-android)
+    else if (const char *external = SDL_GetAndroidExternalStoragePath())
+        game_dir = fs_utils::utf8_to_path(external);
+#else
     else if (const char *base = SDL_GetBasePath())
         game_dir = fs_utils::utf8_to_path(base);
+#endif
     // (Boost keeps a trailing separator as a last element ".")
     game_dir = game_dir.lexically_normal();
     while ((game_dir.filename() == "." || game_dir.filename().empty()) && game_dir.has_parent_path() && game_dir.parent_path() != game_dir)
         game_dir = game_dir.parent_path();
     game_dir /= "";
     Root root_paths;
+#ifdef __ANDROID__
+    // data/ and shaders-builtin/ are the APK's assets, which SDL opens by their relative paths
+    root_paths.set_static_assets_path({});
+#else
     root_paths.set_static_assets_path(game_dir);
+#endif
     root_paths.set_cache_path(game_dir / "cache" / "");
     root_paths.set_patch_path(game_dir / "patch" / "");
     ctx.exe_dir = game_dir;
@@ -469,6 +484,10 @@ int run(Profile &profile, int argc, char *argv[]) {
     cfg.high_accuracy = settings.high_accuracy;
     cfg.disable_surface_sync = settings.surface_sync == 3;
     cfg.memory_mapping = "double-buffer";
+#ifdef __ANDROID__
+    // a Turnip build or another libadrenotools package in the app's files/driver/ (ss-delta 09-android)
+    cfg.custom_driver_name = settings.gpu_driver;
+#endif
     // a pipeline seen for the first time is compiled in the background (its draws are skipped
     // meanwhile) and kept in the pipeline cache next to the executable; no on-screen notice
     cfg.async_pipeline_compilation = true;
@@ -656,6 +675,10 @@ int run(Profile &profile, int argc, char *argv[]) {
         if (!window)
             return;
         SDL_SetWindowTitle(window, ctx.window_name.c_str());
+#ifdef __ANDROID__
+        // the soft keyboard for the game's text dialogs (game-frontend/android.cpp)
+        ime::set_sdl_window(window);
+#endif
         // the game's own icon, from the player's installed copy. Not on macOS: there a window has no
         // icon, and SDL would replace the Dock icon, the app bundle's (shaped as a macOS icon), with
         // this square picture
@@ -670,10 +693,15 @@ int run(Profile &profile, int argc, char *argv[]) {
             stbi_image_free(pixels);
         }
 #endif
+#ifdef __ANDROID__
+        // the whole screen, without the status and navigation bars (SDL's immersive mode)
+        SDL_SetWindowFullscreen(window, true);
+#else
         SDL_SetWindowSize(window, 960 * settings.window_scale, 544 * settings.window_scale);
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         if (settings.fullscreen && !hooks.hidden_window)
             SDL_SetWindowFullscreen(window, true);
+#endif
         emuenv.touch.renderer_focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
     };
     hooks.hidden_window = dump_elfs_seconds > 0;

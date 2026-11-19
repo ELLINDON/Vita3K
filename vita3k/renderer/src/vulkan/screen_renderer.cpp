@@ -67,6 +67,10 @@ bool window_has_drawable_size(const VKState &state) {
 bool has_android_surface() {
     return has_surface.load(std::memory_order_acquire);
 }
+
+void set_android_surface(bool present) {
+    has_surface.store(present, std::memory_order_release);
+}
 #endif
 
 ScreenRenderer::ScreenRenderer(VKState &state)

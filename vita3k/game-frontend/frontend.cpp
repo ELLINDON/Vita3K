@@ -74,6 +74,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -103,8 +104,42 @@ std::string select_recompiled_modules(const fs::path &dir) {
     if (const char *const env = std::getenv("SSD_AOT"))
         return env;
     std::string list;
-    if (fs::is_directory(dir)) {
+#ifdef __ANDROID__
+    // shared storage (Android/data/<package>/files, where a PC puts the modules) is mounted noexec:
+    // dlopen only takes them from the app's internal storage. Copied there when they changed;
+    // copies whose module is gone are removed (ss-delta 09-android)
+    const fs::path loaded_dir = fs::path(SDL_GetAndroidInternalStoragePath()) / "recompiled";
+    if (fs::is_directory(dir) && dir.lexically_normal() != loaded_dir.lexically_normal()) {
+        boost::system::error_code ec;
+        fs::create_directories(loaded_dir, ec);
+        std::set<std::string> present;
         for (const auto &entry : fs::directory_iterator(dir)) {
+            const auto name = entry.path().filename().string();
+            if (!name.starts_with("ssd_aot_") || entry.path().extension() != extension)
+                continue;
+            present.insert(name);
+            const fs::path copy = loaded_dir / name;
+            if (fs::exists(copy) && fs::file_size(copy) == fs::file_size(entry.path())
+                && fs::last_write_time(copy) == fs::last_write_time(entry.path()))
+                continue;
+            fs::copy_file(entry.path(), copy, fs::copy_options::overwrite_existing, ec);
+            if (ec) {
+                LOG_ERROR("Could not copy {} to {}: {}", entry.path(), copy, ec.message());
+                continue;
+            }
+            fs::last_write_time(copy, fs::last_write_time(entry.path()), ec);
+            LOG_INFO("Recompiled module {} copied to internal storage", name);
+        }
+        for (const auto &entry : fs::directory_iterator(loaded_dir))
+            if (!present.contains(entry.path().filename().string()))
+                fs::remove(entry.path(), ec);
+    }
+    const fs::path scan_dir = fs::is_directory(loaded_dir) ? loaded_dir : dir;
+#else
+    const fs::path &scan_dir = dir;
+#endif
+    if (fs::is_directory(scan_dir)) {
+        for (const auto &entry : fs::directory_iterator(scan_dir)) {
             const auto name = entry.path().filename().string();
             if (name.starts_with("ssd_aot_") && entry.path().extension() == extension)
                 list += (list.empty() ? "" : ";") + entry.path().string();

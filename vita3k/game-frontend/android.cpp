@@ -26,12 +26,21 @@
 
 #include <ime/keyboard.h>
 #include <renderer/vulkan/screen_renderer.h>
+#include <util/android_driver.h>
+#include <util/fs.h>
+#include <util/log.h>
 
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_system.h>
+#include <miniz.h>
 #include <spdlog/spdlog.h>
 
 #include <jni.h>
+
+#include <fstream>
+#include <sstream>
+#include <string>
 
 namespace {
 SDL_Window *s_window = nullptr;
@@ -55,6 +64,66 @@ bool SDLCALL flush_logs_on_pause(void *, SDL_Event *event) {
 } // namespace
 
 namespace game_frontend {
+
+// Vulkan driver packages (libadrenotools zips, such as Turnip's <name>.adpkg.zip) that a PC put in
+// <game_dir>/drivers/: unpacked into the app's internal files/driver/<name>/, where the driver loader
+// takes them from ([debug] gpu_driver = <name>), when the zip is new or changed. A release APK can't
+// be reached there from a PC (no run-as), so this is how a driver gets in (ss-delta 09-android).
+void android_install_driver_packages(const fs::path &game_dir) {
+    const fs::path source_dir = game_dir / "drivers";
+    if (!fs::is_directory(source_dir))
+        return;
+    const fs::path driver_root = fs::path(SDL_GetAndroidInternalStoragePath()) / "driver";
+    boost::system::error_code ec;
+    for (const auto &entry : fs::directory_iterator(source_dir)) {
+        const fs::path zip_path = entry.path();
+        if (zip_path.extension() != ".zip")
+            continue;
+        std::string name = zip_path.stem().string(); // <name>.adpkg.zip -> <name>.adpkg -> <name>
+        if (name.ends_with(".adpkg"))
+            name.resize(name.size() - 6);
+        const fs::path target = driver_root / name;
+        const std::string stamp = fmt::format("{} {}", fs::file_size(zip_path), fs::last_write_time(zip_path));
+        const fs::path marker = target / ".package";
+        if (std::ifstream in{ fs_utils::path_to_utf8(marker) }; in) {
+            std::stringstream recorded;
+            recorded << in.rdbuf();
+            if (recorded.str() == stamp)
+                continue;
+        }
+        fs::remove_all(target, ec);
+        fs::create_directories(target, ec);
+
+        mz_zip_archive zip{};
+        if (!mz_zip_reader_init_file(&zip, fs_utils::path_to_utf8(zip_path).c_str(), 0)) {
+            LOG_ERROR("Driver package {}: not a zip ({})", zip_path, mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+            continue;
+        }
+        bool ok = true;
+        for (mz_uint i = 0; ok && i < mz_zip_reader_get_num_files(&zip); i++) {
+            mz_zip_archive_file_stat stat{};
+            if (!mz_zip_reader_file_stat(&zip, i, &stat) || mz_zip_reader_is_file_a_directory(&zip, i))
+                continue;
+            const fs::path relative = fs::path(stat.m_filename).lexically_normal();
+            if (!android_driver::is_safe_driver_relative_path(relative)) {
+                LOG_ERROR("Driver package {}: unsafe entry {}", zip_path, stat.m_filename);
+                ok = false;
+                break;
+            }
+            const fs::path out = target / relative;
+            fs::create_directories(out.parent_path(), ec);
+            ok = mz_zip_reader_extract_to_file(&zip, i, fs_utils::path_to_utf8(out).c_str(), 0);
+        }
+        mz_zip_reader_end(&zip);
+        if (!ok || !android_driver::resolve_custom_driver_library_name(target)) {
+            LOG_ERROR("Driver package {} could not be unpacked into {}", zip_path, target);
+            fs::remove_all(target, ec);
+            continue;
+        }
+        std::ofstream(fs_utils::path_to_utf8(marker)) << stamp;
+        LOG_INFO("Driver package {} unpacked: [debug] gpu_driver = {} uses it", zip_path.filename(), name);
+    }
+}
 
 // the frontend's window exists: the soft keyboard's window, the log flush on pause
 void android_window_created(SDL_Window *window) {

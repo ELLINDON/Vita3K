@@ -80,6 +80,7 @@ namespace game_frontend {
 
 #ifdef __ANDROID__
 void android_window_created(SDL_Window *window); // android.cpp
+void android_install_driver_packages(const fs::path &game_dir); // android.cpp
 #endif
 
 namespace {
@@ -493,6 +494,10 @@ int run(Profile &profile, int argc, char *argv[]) {
             return *exit_code;
     }
 
+#ifdef __ANDROID__
+    // Vulkan driver packages a PC put in drivers/, into the app's internal storage ([debug] gpu_driver)
+    android_install_driver_packages(ctx.exe_dir);
+#endif
     if (settings.use_recompiled) {
         const std::string modules = select_recompiled_modules(settings.recompiled);
         LOG_INFO_IF(!modules.empty(), "Recompiled modules: {}", modules);

@@ -481,7 +481,7 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
 		game-frontend/input.cpp game-frontend/input.h
 		game-frontend/settings_menu.cpp game-frontend/settings_menu.h
 		game-frontend/importer.cpp game-frontend/importer_apple.cpp game-frontend/importer.h
-		interface.cpp interface.h performance.cpp)
+		interface.cpp interface.h)
 	target_link_libraries(game-frontend PUBLIC app audio compat config ctrl dialog display ime lang gdbstub gxm io miniz modules motion ngs overlay packages patch renderer sdl-frontend shader touch util psvpfsparser pugixml::pugixml SDL3::SDL3)
 	if(WIN32)
 		target_link_libraries(game-frontend PUBLIC Version)
@@ -495,7 +495,10 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
 
 	# add_game(<target> <sources>...): a game's executable on the shared frontend
 	function(add_game target)
-		set(sources ${ARGN})
+		# performance.cpp (the NvOptimusEnablement and AmdPowerXpressRequestHighPerformance exports
+		# that ask hybrid laptops' drivers for the discrete GPU) in the executable itself: nothing
+		# references them, so from the static library the linker leaves them out
+		set(sources ${ARGN} performance.cpp)
 		if(WIN32)
 			add_executable(${target} WIN32 ${sources} util/src/vc_runtime_checker.cpp resource.h Windows.manifest)
 		else()

@@ -22,9 +22,11 @@
 #include <util/fs.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 namespace ddspp {
 struct Descriptor;
@@ -74,6 +76,22 @@ struct SamplerCacheInfo {
 struct AvailableTexture {
     bool is_dds;
     std::shared_ptr<fs::path> folder_path;
+    // made in memory by the TextureOverride (RGBA8 in override_pixels), not read from a file
+    bool in_memory = false;
+};
+
+// A game's own pictures for some of its textures, made while the game runs (the single-game front
+// end's button labels, game-frontend/button_labels.h). The cache asks it about each texture it
+// uploads whose format and size `wants` accepts; `make` gets the texture's first level as the game
+// holds it and returns RGBA8 pixels of any size (uploaded as an imported texture), or false to keep
+// the game's own. Called on the render thread.
+class TextureOverride {
+public:
+    virtual ~TextureOverride() = default;
+    virtual bool wants(SceGxmTextureBaseFormat format, uint32_t width, uint32_t height) const = 0;
+    virtual bool make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t height, const uint8_t *data, uint32_t size,
+        std::vector<uint8_t> &rgba, uint32_t &out_width, uint32_t &out_height)
+        = 0;
 };
 
 class TextureCache {
@@ -88,6 +106,12 @@ protected:
 
     // dds/png raw file
     std::vector<uint8_t> imported_texture_raw_data;
+    // the TextureOverride's picture for the texture being uploaded (AvailableTexture::in_memory)
+    std::vector<uint8_t> override_pixels;
+    uint32_t override_width = 0, override_height = 0;
+    std::atomic<bool> texture_override_changed{ false };
+    // marks every cached texture for upload at its next use
+    void invalidate_all_textures();
     // pointer to the decoded content
     uint8_t *imported_texture_decoded = nullptr;
     // Info about the texture currently loading
@@ -147,6 +171,12 @@ public:
     bool init(const bool hashless_texture_cache, const fs::path &texture_folder, const std::string_view game_id, const size_t sampler_cache_size = 0);
     void set_replacement_state(bool import_textures, bool export_textures, bool export_as_png);
 
+    // The game's TextureOverride (null: none). Set it once, before the game's textures load; the
+    // front end keeps it alive. After it changes what it makes, call refresh_texture_override (any
+    // thread): every texture is uploaded again at its next use.
+    std::atomic<TextureOverride *> texture_override{ nullptr };
+    void refresh_texture_override() { texture_override_changed = true; }
+
     virtual void select(size_t index, const SceGxmTexture &texture) = 0;
     virtual void configure_texture(const SceGxmTexture &texture) = 0;
     virtual void upload_texture_impl(SceGxmTextureBaseFormat base_format, uint32_t width, uint32_t height, uint32_t mip_index, const void *pixels, int face, uint32_t pixels_per_stride) = 0;
@@ -170,6 +200,8 @@ public:
 
     // return false if there was an issue with the replacement texture
     bool import_configure_texture();
+    // the end of import_configure_texture: the texture's parameters, reconfigured when they changed
+    bool import_configure_finish(SceGxmTextureBaseFormat base_format, uint32_t width, uint32_t height, bool is_srgb, uint32_t nb_comp, uint16_t mipcount, bool swap_rb);
     virtual void import_configure_impl(SceGxmTextureBaseFormat base_format, uint32_t width, uint32_t height, bool is_srgb, uint16_t nb_components, uint16_t mipcount, bool swap_rb) = 0;
     void import_upload_texture();
     void import_done();

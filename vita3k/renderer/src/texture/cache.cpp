@@ -688,8 +688,19 @@ static constexpr TextureGxmDataRepr strided_texture_mask = {
     0xF3FFFFFF
 };
 
+void TextureCache::invalidate_all_textures() {
+    for (auto &queue_item : texture_queue.items) {
+        queue_item.content.hash = 0;
+        queue_item.content.dirty = true;
+    }
+}
+
 void TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemState &mem) {
     R_PROFILE(__func__);
+
+    // the TextureOverride changed its pictures: upload everything again
+    if (texture_override_changed.exchange(false))
+        invalidate_all_textures();
 
     size_t index = 0;
     bool configure = false;
@@ -809,6 +820,24 @@ void TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemS
             // the reason being that we may have two replacement textures for the same gxm identifier
             // with different dimensions, so we can't assume
             configure = true;
+        }
+    }
+
+    // the game's TextureOverride: its picture in place of the texture, made from the texture's data
+    TextureOverride *const override = texture_override.load(std::memory_order_acquire);
+    if (upload && !importing_texture && override) {
+        const SceGxmTextureBaseFormat base_format = gxm::get_base_format(gxm::get_format(gxm_texture));
+        const uint32_t width = gxm::get_width(gxm_texture);
+        const uint32_t height = gxm::get_height(gxm_texture);
+        if (gxm_texture.texture_type() == SCE_GXM_TEXTURE_SWIZZLED && override->wants(base_format, width, height)) {
+            const Ptr<const uint8_t> data(gxm_texture.data_addr << 2);
+            const uint32_t size = gxm::texture_size_first_mip(gxm_texture);
+            if (data && is_valid_addr_range(mem, data.address(), data.address() + size)
+                && override->make(base_format, width, height, data.get(mem), size, override_pixels, override_width, override_height)) {
+                importing_texture = true;
+                loading_texture = AvailableTexture{ false, nullptr, true };
+                configure = true;
+            }
         }
     }
 

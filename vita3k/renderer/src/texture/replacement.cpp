@@ -438,6 +438,12 @@ void TextureCache::export_done() {
 }
 
 bool TextureCache::import_configure_texture() {
+    if (loading_texture.in_memory) {
+        // the TextureOverride's picture, RGBA8
+        imported_texture_decoded = override_pixels.data();
+        return import_configure_finish(SCE_GXM_TEXTURE_BASE_FORMAT_U8U8U8U8, override_width, override_height, false, 4, 1, false);
+    }
+
     uint64_t hash = current_info->hash;
     const std::string file_name = fmt::format("{:016X}.{}", hash, loading_texture.is_dds ? "dds" : "png");
     fs::path import_name = *loading_texture.folder_path / file_name;
@@ -544,6 +550,10 @@ bool TextureCache::import_configure_texture() {
     if (log_texture_import)
         LOG_DEBUG("Importing texture {} ({}x{})", file_name, width, height);
 
+    return import_configure_finish(base_format, width, height, is_srgb, nb_comp, mipcount, swap_rb);
+}
+
+bool TextureCache::import_configure_finish(SceGxmTextureBaseFormat base_format, uint32_t width, uint32_t height, bool is_srgb, uint32_t nb_comp, uint16_t mipcount, bool swap_rb) {
     if (current_info->is_imported
         && current_info->width == width
         && current_info->height == height
@@ -593,7 +603,9 @@ void TextureCache::import_upload_texture() {
 }
 
 void TextureCache::import_done() {
-    if (loading_texture.is_dds) {
+    if (loading_texture.in_memory) {
+        imported_texture_decoded = nullptr;
+    } else if (loading_texture.is_dds) {
         imported_texture_raw_data.clear();
         imported_texture_decoded = nullptr;
     } else {

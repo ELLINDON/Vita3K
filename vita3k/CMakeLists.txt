@@ -481,6 +481,7 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR ANDROID)
 		game-frontend/frontend.cpp game-frontend/profile.h game-frontend/settings.cpp game-frontend/settings.h
 		game-frontend/input.cpp game-frontend/input.h
 		game-frontend/settings_menu.cpp game-frontend/settings_menu.h
+		game-frontend/button_labels.cpp game-frontend/button_labels.h
 		game-frontend/importer.cpp game-frontend/importer_apple.cpp game-frontend/importer.h
 		interface.cpp interface.h)
 	target_link_libraries(game-frontend PUBLIC app audio compat config ctrl dialog display ime lang gdbstub gxm io miniz modules motion ngs overlay packages patch renderer sdl-frontend shader touch util psvpfsparser pugixml::pugixml SDL3::SDL3)
@@ -581,7 +582,8 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR ANDROID)
 
 	# Soul Sacrifice Delta (PCSA00152)
 	add_game(ss-delta games/ss-delta/main.cpp games/ss-delta/saves.cpp games/ss-delta/saves.h
-		games/ss-delta/dlc.cpp games/ss-delta/dlc.h games/ss-delta/ss-delta.ico games/ss-delta/ss-delta.rc)
+		games/ss-delta/dlc.cpp games/ss-delta/dlc.h games/ss-delta/button_atlases.inc
+		games/ss-delta/ss-delta.ico games/ss-delta/ss-delta.rc)
 	# Shinobido 2: Revenge of Zen (PCSE00015)
 	add_game(shinobido2 games/shinobido2/main.cpp games/shinobido2/saves.cpp games/shinobido2/saves.h
 		games/shinobido2/shinobido2.ico games/shinobido2/shinobido2.rc)

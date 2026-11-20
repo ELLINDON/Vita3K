@@ -19,6 +19,7 @@
 // (game-frontend/profile.h). This file holds what is particular to the game: its settings, save
 // import and export, the add-on unlock, Ad Hoc Play, its engine settings and its frame rate.
 
+#include "../../game-frontend/button_labels.h"
 #include "../../game-frontend/profile.h"
 #include "dlc.h"
 #include "saves.h"
@@ -33,6 +34,8 @@
 #include <mem/functions.h>
 #include <mem/ptr.h>
 #include <modules/module_parent.h>
+#include <renderer/state.h>
+#include <renderer/texture_cache.h>
 #include <util/log.h>
 #include <util/net_utils.h>
 
@@ -40,6 +43,7 @@
 // provides WinMain for the windowed executable, which calls main below
 #include <SDL3/SDL_main.h>
 
+#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <map>
@@ -155,6 +159,7 @@ game_frontend::IniLayout ini_layout() {
             "system.bin is changed once (a copy goes to ss-delta/save-backups/)." } } };
     game.settings[0].title = "Add-ons (DLC)";
     game.settings.push_back(language_setting());
+    game.settings.push_back(game_frontend::button_labels_setting());
     // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
     // rarely used for several copies on one machine, and with local its rooms never reached the network
 #ifdef _WIN32
@@ -318,6 +323,15 @@ int update_frame_rate(EmuEnvState &emuenv, int fps, int current) {
     return want;
 }
 
+// the game's button-icon atlases (com_001_*) and their PlayStation symbols, all languages
+// (ss-delta tools/button-atlases.py; docs/01-research.md, "Button prompts")
+std::vector<game_frontend::ButtonAtlas> button_atlases() {
+    using Symbol = game_frontend::ButtonSymbol;
+    return {
+#include "button_atlases.inc"
+    };
+}
+
 // --import-save / --export-save
 struct SaveCommand {
     std::string import_from, export_to;
@@ -442,10 +456,22 @@ int main(int argc, char *argv[]) {
         if (full_3d)
             emuenv.gxm.on_program_registered = unscale_depth_uvs;
     };
+    // [game] button_labels: the button atlases redrawn with Xbox labels as they are uploaded (the
+    // renderer exists from the first ticks, before the game loads them); the settings menu switches it
+    game_frontend::ButtonLabels button_labels(button_atlases());
     hooks.on_tick = [&](game_frontend::Context &ctx) {
         const int fps = ctx.settings->values.get_int("display.frame_rate");
         if (fps != 30 && frame_rate != -1)
             frame_rate = update_frame_rate(*ctx.emuenv, fps, frame_rate);
+        if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
+            const bool changed = button_labels.configure(ctx.settings->values.get("game.button_labels"), ctx.settings->gamepad,
+                static_cast<int>(std::lround(ctx.settings->scale)));
+            if (cache->texture_override.load() != &button_labels) {
+                cache->texture_override = &button_labels;
+                cache->refresh_texture_override();
+            } else if (changed)
+                cache->refresh_texture_override();
+        }
     };
     hooks.before_dump_quit = [&](game_frontend::Context &ctx) {
         // Ad Hoc Play's matching module loads only when that menu opens: load it now so it is

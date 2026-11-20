@@ -112,6 +112,22 @@ void touch_vsync_update(EmuEnvState &emuenv) {
         }
         buffers[touch.touchscreen_port] = touch_data;
 
+        // the held points too (the frontend's [touch] bindings, such as a gamepad trigger, and the test
+        // driver's fingers), as without fingers: Android always takes this branch
+        const std::lock_guard<std::mutex> lock(touch.held_mutex);
+        for (int port = 0; port < 2; port++) {
+            if (!touch.touch_mode[port])
+                continue;
+            SceTouchData &data = buffers[port];
+            for (const auto &held : touch.held[port]) {
+                if (data.reportNum >= SCE_TOUCH_MAX_REPORT)
+                    break;
+                data.report[data.reportNum].x = held.x;
+                data.report[data.reportNum].y = held.y;
+                data.report[data.reportNum].id = held.id;
+                ++data.reportNum;
+            }
+        }
     } else {
         const auto &ts = emuenv.touch;
         const bool allow_mouse_touch = ts.renderer_focused && !is_common_dialog_running(emuenv);

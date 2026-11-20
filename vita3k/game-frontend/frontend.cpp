@@ -81,6 +81,7 @@ namespace game_frontend {
 #ifdef __ANDROID__
 void android_window_created(SDL_Window *window); // android.cpp
 void android_install_driver_packages(const fs::path &game_dir); // android.cpp
+std::string android_gpu_driver(const std::string &setting); // android.cpp
 #endif
 
 namespace {
@@ -527,7 +528,8 @@ int run(Profile &profile, int argc, char *argv[]) {
     cfg.memory_mapping = "double-buffer";
 #ifdef __ANDROID__
     // a Turnip build or another libadrenotools package in the app's files/driver/ (ss-delta 09-android)
-    cfg.custom_driver_name = settings.gpu_driver;
+    cfg.custom_driver_name = android_gpu_driver(settings.gpu_driver);
+    LOG_INFO("Vulkan driver: {} ([debug] gpu_driver = {})", cfg.custom_driver_name.empty() ? "the system's" : cfg.custom_driver_name, settings.gpu_driver);
 #endif
     // a pipeline seen for the first time is compiled in the background (its draws are skipped
     // meanwhile) and kept in the pipeline cache next to the executable; no on-screen notice
@@ -641,8 +643,15 @@ int run(Profile &profile, int argc, char *argv[]) {
     }
 
     if (!fs::exists(emuenv.vita_fs_path / "ux0" / "app" / profile.title_id / "eboot.bin")) {
+#ifdef __ANDROID__
+        // the files come from a PC (the game's setup there: android.py push), not from an ini edit
+        fail(fmt::format("{} ({}) is not installed in {}.\nSet the game up on a PC and copy it to this device "
+                         "from there (the game's install tools: android.py push).",
+            profile.name, profile.title_id, emuenv.vita_fs_path.string()));
+#else
         fail(fmt::format("{} ({}) is not installed in {}.\nSet [paths] vita_fs in {}.ini.",
             profile.name, profile.title_id, emuenv.vita_fs_path.string(), profile.id));
+#endif
         return 1;
     }
 

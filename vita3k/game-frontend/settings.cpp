@@ -514,10 +514,10 @@ IniSection debug(const std::string &id) {
             { "high_accuracy", Kind::Bool, "true", 0, 0, {},
                 "Vita3K's high-accuracy rendering (steady smoke). false is faster but can flicker." },
 #ifdef __ANDROID__
-            { "gpu_driver", Kind::Text, "", 0, 0, {},
-                "A Vulkan driver in place of the system's: the name of a folder in the app's files/driver/\n"
-                "holding a libadrenotools package (meta.json and the driver's .so), such as a Turnip build.\n"
-                "Empty: the system's driver. One that fails to load falls back to the system's." },
+            { "gpu_driver", Kind::Text, "auto", 0, 0, {},
+                "The Vulkan driver: auto (the driver package installed last from drivers/, such as the Turnip\n"
+                "the game offers to download on Adreno GPUs; else the system's), system, or the name of a\n"
+                "package (<name> for drivers/<name>.adpkg.zip). One that fails to load falls back to the system's." },
 #endif
         } };
 }

@@ -125,6 +125,32 @@ void android_install_driver_packages(const fs::path &game_dir) {
     }
 }
 
+// [debug] gpu_driver as Vita3K's custom driver name: auto is the package installed last from drivers/
+// (the newest marker), or the system's driver when there is none; system (or empty) is the system's
+std::string android_gpu_driver(const std::string &setting) {
+    if (setting.empty() || setting == "system")
+        return {};
+    if (setting != "auto")
+        return setting;
+    const fs::path driver_root = fs::path(SDL_GetAndroidInternalStoragePath()) / "driver";
+    std::string newest;
+    std::time_t newest_time = 0;
+    boost::system::error_code ec;
+    if (fs::is_directory(driver_root)) {
+        for (const auto &entry : fs::directory_iterator(driver_root)) {
+            const fs::path marker = entry.path() / ".package";
+            if (!fs::exists(marker))
+                continue;
+            const std::time_t t = fs::last_write_time(marker, ec);
+            if (!ec && (newest.empty() || t > newest_time)) {
+                newest = entry.path().filename().string();
+                newest_time = t;
+            }
+        }
+    }
+    return newest;
+}
+
 // the frontend's window exists: the soft keyboard's window, the log flush on pause
 void android_window_created(SDL_Window *window) {
     ime::set_sdl_window(window);

@@ -27,6 +27,19 @@
 		android:isGame="true"
 		android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
 
+		<!-- the launcher's entry: offers a Turnip driver where it is needed, then starts the game -->
+		<activity
+			android:name="io.github.vitarecomps.frontend.SetupActivity"
+			android:exported="true"
+			android:screenOrientation="sensorLandscape"
+			android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+			</intent-filter>
+		</activity>
+
+		<!-- the game (started by SetupActivity; test tools start it directly) -->
 		<activity
 			android:name="io.github.vitarecomps.frontend.GameActivity"
 			android:exported="true"
@@ -37,10 +50,6 @@
 			android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
 			<!-- the game's native library (lib<game>.so), which GameActivity names to SDL -->
 			<meta-data android:name="game.library" android:value="${gameLibrary}" />
-			<intent-filter>
-				<action android:name="android.intent.action.MAIN" />
-				<category android:name="android.intent.category.LAUNCHER" />
-			</intent-filter>
 		</activity>
 	</application>
 </manifest>

@@ -160,6 +160,9 @@ game_frontend::IniLayout ini_layout() {
             "game's own data since update 1.30; PSN, which recorded the purchases, is closed. The save's\n"
             "system.bin is changed once (a copy goes to ss-delta/save-backups/)." } } };
     game.settings[0].title = "Add-ons (DLC)";
+    game.settings.push_back({ "skip_intro", Kind::Bool, "false", 0, 0, {},
+        "Skip the health warning and the company logos at start: the game opens on its title screen." });
+    game.settings.back().title = "Skip intro logos";
     game.settings.push_back(language_setting());
     game.settings.push_back(game_frontend::button_labels_setting());
     // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
@@ -325,6 +328,52 @@ int update_frame_rate(EmuEnvState &emuenv, int fps, int current) {
     return want;
 }
 
+// [game] skip_intro (ss-delta docs/01-research.md, "Boot logos"): the boot's health warning and
+// logos are GameLogoTasks that GameLogoControlTask (the singleton *0x81c957d0, built by 0x812ad8ce)
+// keeps in a list (+0x50, count +0x48) and shows one after another. Each logo plays a timeline of
+// floats in seconds: start delay +0x50, fade in +0x54, hold +0x58, fade out +0x5c, black +0x60;
+// it is done (state +0x44 = 3) at its end, and the control task moves on, then starts the title.
+// The timelines are data: set to 0, each logo ends on its first frame, before its fade-in. The
+// vtables are checked, so nothing else is written. The constructor sets the singleton before it
+// fills the list, so the list is read once the control task's init has run (its state +0x44 is 1,
+// then 2 when all are shown); the first logo then waits out its start delay (1/6 s) at most.
+// Called every frame; returns the control task handled.
+Address skip_intro_logos(EmuEnvState &emuenv, Address done) {
+    constexpr Address CONTROL_HOLDER = 0x81c957d0;
+    constexpr uint32_t CONTROL_VTABLE = 0x81c5ede0, LOGO_VTABLE = 0x81c5ee14;
+    constexpr uint32_t CONTROL_RUNNING = 1, LOGO_DONE = 3;
+    auto &mem = emuenv.mem;
+    const auto u32 = [&](Address a) -> uint32_t * { return is_valid_addr(mem, a) ? Ptr<uint32_t>(a).get(mem) : nullptr; };
+    const uint32_t *const holder = u32(CONTROL_HOLDER);
+    if (!holder || !*holder || *holder == done)
+        return done;
+    const Address control = *holder;
+    const uint32_t *const vtable = u32(control);
+    const uint32_t *const state = u32(control + 0x44);
+    const uint32_t *const count = u32(control + 0x48);
+    const uint32_t *const list = u32(control + 0x50);
+    if (!vtable || *vtable != CONTROL_VTABLE || !state || !count || !list)
+        return done;
+    if (*state != CONTROL_RUNNING)
+        return *state > CONTROL_RUNNING ? control : done;
+    if (!*list || !*count || *count > 8)
+        return control;
+    int skipped = 0;
+    for (uint32_t i = 0; i < *count; i++) {
+        const uint32_t *const entry = u32(*list + 4 * i);
+        if (!entry || !*entry || !is_valid_addr(mem, *entry + 0x63))
+            continue;
+        uint32_t *const logo = Ptr<uint32_t>(*entry).get(mem);
+        if (logo[0] != LOGO_VTABLE || logo[0x44 / 4] == LOGO_DONE)
+            continue;
+        for (uint32_t field = 0x50; field <= 0x60; field += 4)
+            logo[field / 4] = 0; // 0.0f
+        skipped++;
+    }
+    LOG_INFO("skip_intro: {} of {} boot logos skipped", skipped, *count);
+    return control;
+}
+
 // the game's textures with PlayStation buttons (the com_001_* icon atlases, tutorial pictures, the
 // font page with the text's symbols) and the symbols in them, all languages (ss-delta
 // tools/button-atlases.py; docs/01-research.md, "Button prompts")
@@ -390,6 +439,7 @@ int main(int argc, char *argv[]) {
     // switches it
     game_frontend::ButtonLabels button_labels(button_atlases());
     int frame_rate = 30; // what update_frame_rate last set (-1: left alone)
+    Address intro_skipped = 0; // the logo control task skip_intro_logos handled
 
     game_frontend::Profile profile;
     profile.title_id = TITLE_ID;
@@ -509,6 +559,8 @@ int main(int argc, char *argv[]) {
         const int fps = ctx.settings->values.get_int("display.frame_rate");
         if (fps != 30 && frame_rate != -1)
             frame_rate = update_frame_rate(*ctx.emuenv, fps, frame_rate);
+        if (ctx.settings->values.get_bool("game.skip_intro"))
+            intro_skipped = skip_intro_logos(*ctx.emuenv, intro_skipped);
         if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
             // auto: from the first connected gamepad's own labels (it may change while the game runs)
             std::string style = ctx.settings->values.get("game.button_labels");

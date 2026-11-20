@@ -51,5 +51,17 @@
 			<!-- the game's native library (lib<game>.so), which GameActivity names to SDL -->
 			<meta-data android:name="game.library" android:value="${gameLibrary}" />
 		</activity>
+
+		<!-- the front end's setup steps (install the firmware and the game, dump the modules), each in a
+		     process of its own that ends with it (FrontendStepActivity) -->
+		<activity
+			android:name="io.github.vitarecomps.frontend.FrontendStepActivity"
+			android:exported="false"
+			android:process=":frontend_step"
+			android:screenOrientation="sensorLandscape"
+			android:resizeableActivity="false"
+			android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
+			<meta-data android:name="game.library" android:value="${gameLibrary}" />
+		</activity>
 	</application>
 </manifest>

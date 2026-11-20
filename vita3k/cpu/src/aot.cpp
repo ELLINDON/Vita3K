@@ -124,7 +124,8 @@ void load_modules() {
     std::stringstream list{ std::string(env) };
     std::string path;
     while (std::getline(list, path, ';')) {
-        if (path.empty())
+        // "none": no modules, but SSD_AOT set (a setup's ELF dump: libfiber's HLE, as with modules)
+        if (path.empty() || path == "none")
             continue;
 #ifdef _WIN32
         const HMODULE dll = LoadLibraryA(path.c_str());

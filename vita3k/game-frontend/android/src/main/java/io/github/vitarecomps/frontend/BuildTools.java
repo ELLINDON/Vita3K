@@ -83,8 +83,10 @@ final class BuildTools {
         String stamp = new String(readAll(context.getAssets().open(STAMP)), StandardCharsets.UTF_8);
         File root = root(context);
         File done = new File(root, STAMP);
-        if (done.isFile() && new String(readAll(new java.io.FileInputStream(done)), StandardCharsets.UTF_8).equals(stamp))
+        if (done.isFile() && new String(readAll(new java.io.FileInputStream(done)), StandardCharsets.UTF_8).equals(stamp)) {
+            linkZig(context);
             return;
+        }
         log.accept("unpacking the build tools");
         deleteTree(root);
         if (!root.mkdirs())
@@ -111,20 +113,31 @@ final class BuildTools {
                 files++;
             }
         }
-        // toolchain.py runs <toolchain>/zig/zig: the program in the native library folder. zig finds its
-        // lib/ through ZIG_LIB_DIR (see environment), as it resolves its own path past the link
-        File zigDir = new File(toolchain(context), "zig");
-        if (!zigDir.mkdirs())
-            throw new IOException("could not make " + zigDir);
-        try {
-            Os.symlink(nativeLibraryDir(context) + "/libzig.so", new File(zigDir, "zig").getPath());
-        } catch (ErrnoException e) {
-            throw new IOException("could not link zig: " + e.getMessage());
-        }
+        linkZig(context);
         try (FileOutputStream out = new FileOutputStream(done)) {
             out.write(stamp.getBytes(StandardCharsets.UTF_8));
         }
         log.accept("unpacked " + files + " files");
+    }
+
+    // toolchain.py runs <toolchain>/zig/zig: a link to the program in the native library folder, made
+    // again each time, because that folder moves whenever the APK is installed or updated
+    // (/data/app/~~<random>/...). zig finds its lib/ through ZIG_LIB_DIR (see environment), as it
+    // resolves its own path past the link
+    private static void linkZig(Context context) throws IOException {
+        File zigDir = new File(toolchain(context), "zig");
+        if (!zigDir.isDirectory() && !zigDir.mkdirs())
+            throw new IOException("could not make " + zigDir);
+        File link = new File(zigDir, "zig");
+        String target = nativeLibraryDir(context) + "/libzig.so";
+        try {
+            if (isLink(link) && target.equals(Os.readlink(link.getPath())))
+                return;
+            link.delete();
+            Os.symlink(target, link.getPath());
+        } catch (ErrnoException e) {
+            throw new IOException("could not link zig: " + e.getMessage());
+        }
     }
 
     /** A process running the tools' Python with these arguments (as the python command takes them). */

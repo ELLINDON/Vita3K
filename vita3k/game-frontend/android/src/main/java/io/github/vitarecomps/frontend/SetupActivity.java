@@ -239,7 +239,9 @@ public class SetupActivity extends Activity {
     // Test tools only, in debuggable builds (ss-delta 14g):
     //   adb shell am start -n <package>/io.github.vitarecomps.frontend.SetupActivity --es buildtools selftest
     //   ... --es buildtools python --es args "<arguments; {kit} and {toolchain} name those folders>"
-    // runs the build tools and logs to buildtools-test.log in the app's external folder
+    //   ... --es buildtools frontend --es args "<the front end's arguments>" (FrontendStepActivity)
+    // runs the build tools, or a step of the front end, and logs to buildtools-test.log in the app's
+    // external folder
     private boolean buildToolsTest() {
         Intent intent = getIntent();
         String mode = intent != null ? intent.getStringExtra("buildtools") : null;
@@ -252,6 +254,15 @@ public class SetupActivity extends Activity {
         String args = intent.getStringExtra("args");
         File base = getExternalFilesDir(null);
         File logFile = new File(base != null ? base : getFilesDir(), "buildtools-test.log");
+        if (mode.equals("frontend")) {
+            // one of the front end's steps (FrontendStepActivity); its exit code arrives in onActivityResult
+            testLog = logFile;
+            testStart = System.currentTimeMillis();
+            testLog("== frontend " + args);
+            startActivityForResult(new Intent(this, FrontendStepActivity.class)
+                .putExtra("args", (args != null ? args : "").trim().split("\\s+")), REQUEST_FRONTEND_TEST);
+            return true;
+        }
         new Thread(() -> {
             long start = System.currentTimeMillis();
             try (java.io.PrintWriter log = new java.io.PrintWriter(new java.io.FileWriter(logFile, true), true)) {
@@ -296,6 +307,30 @@ public class SetupActivity extends Activity {
             main.post(this::finish);
         }).start();
         return true;
+    }
+
+    private static final int REQUEST_FRONTEND_TEST = 1;
+    private File testLog;
+    private long testStart;
+
+    private void testLog(String line) {
+        String stamped = String.format(java.util.Locale.ROOT, "%7.1f %s", (System.currentTimeMillis() - testStart) / 1000.0, line);
+        Log.i(TAG, stamped);
+        try (java.io.FileWriter out = new java.io.FileWriter(testLog, true)) {
+            out.write(stamped + "\n");
+        } catch (IOException e) {
+            Log.e(TAG, "test log", e);
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_FRONTEND_TEST && testLog != null) {
+            int code = data != null ? data.getIntExtra(FrontendStepActivity.EXTRA_EXIT_CODE, -1) : -1;
+            testLog("frontend step result " + resultCode + ", exit " + code);
+            finish();
+        }
     }
 
     private void startGame() {

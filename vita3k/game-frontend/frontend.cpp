@@ -527,6 +527,17 @@ int run(Profile &profile, int argc, char *argv[]) {
     // Vulkan driver packages a PC put in drivers/, into the app's internal storage ([debug] gpu_driver)
     android_install_driver_packages(ctx.exe_dir);
 #endif
+    // --dump-elfs: no recompiled modules, everything on the JIT, as the desktop setup has always run it
+    // (install-game.py's environment). SSD_AOT also makes fiber switches go through SceFiber's HLE
+    // (load_module.cpp), as in play with native code: libfiber isn't loaded, and the modules after it
+    // are dumped at the addresses they take in play (on Android, which has no such environment,
+    // libfiber loaded and moved libult and the later modules)
+    if (dump_elfs_seconds > 0) {
+        if (!std::getenv("SSD_AOT"))
+            set_env("SSD_AOT", "none");
+        if (!std::getenv("SSD_AOT_NATIVE"))
+            set_env("SSD_AOT_NATIVE", "0");
+    }
     if (settings.use_recompiled) {
         const std::string modules = select_recompiled_modules(settings.recompiled);
         LOG_INFO_IF(!modules.empty(), "Recompiled modules: {}", modules);

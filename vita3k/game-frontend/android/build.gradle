@@ -7,6 +7,10 @@
 //   appName        the name under the icon
 //   versionName, versionCode
 //   jniLibsDir     a folder holding arm64-v8a/lib<game>.so
+// The release build is signed with the key in the environment when there is one (the release
+// workflow: ANDROID_KEYSTORE, a keystore file, and ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+// ANDROID_KEY_PASSWORD), else with the debug key. Players' installs can only be updated by an APK
+// signed with the same key, so releases must always use the one release key.
 plugins {
 	id 'com.android.application' version '9.2.1'
 }
@@ -35,6 +39,18 @@ android {
 		}
 	}
 
+	def keystore = System.getenv('ANDROID_KEYSTORE')
+	signingConfigs {
+		if (keystore) {
+			release {
+				storeFile = file(keystore)
+				storePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD')
+				keyAlias = System.getenv('ANDROID_KEY_ALIAS')
+				keyPassword = System.getenv('ANDROID_KEY_PASSWORD') ?: System.getenv('ANDROID_KEYSTORE_PASSWORD')
+			}
+		}
+	}
+
 	buildTypes {
 		debug {
 			// run-as for the test tools (adb: the driver package, the modules, logs)
@@ -43,7 +59,7 @@ android {
 		}
 		release {
 			minifyEnabled = false
-			signingConfig = signingConfigs.debug
+			signingConfig = keystore ? signingConfigs.release : signingConfigs.debug
 		}
 	}
 

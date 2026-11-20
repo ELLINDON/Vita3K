@@ -251,6 +251,15 @@ your own dump of the game, then the game starts. Everything stays in the game's 
                               instead of playing (exit code 0: built)
   --add-to-steam              Linux and the Steam Deck: add the game to Steam (Steam must be
                               running), then quit
+  --android                   put the game, built here, on an Android device (its app, files and
+                              code built for Android; the importer's window asks how the device is
+                              connected), then quit. With --dump: build it for both, then copy it
+  --serial <s>, --pair <host:port> --code <code>, --connect <host:port>, --push-only,
+  --accept-android-sdk-license, --apk <file>
+                              (with --android) no window: the device by adb serial, or paired over
+                              Wi-Fi (the address and code its Wireless debugging screen shows);
+                              copy again what was built before; accept Google's licence for adb,
+                              which the importer downloads; another APK than the release's
   --accept-microsoft-license  (Windows, with --dump) accept Microsoft's licence for the compiler's
                               C++ runtime and Windows SDK, which the importer downloads
   --shortcut, --steam         (with --dump) a desktop shortcut (Windows), the game in Applications
@@ -295,7 +304,8 @@ int run(Profile &profile, int argc, char *argv[]) {
     std::vector<std::string> importer_args; // --dump parts, as the importer's --install parts
     std::vector<std::string> importer_options; // the importer's own options, passed on to it
     std::vector<std::string> overrides; // --set
-    bool open_importer = false, add_to_steam = false, help = false, build_only = false;
+    std::vector<std::string> android_options; // --android's, passed on to the importer
+    bool open_importer = false, add_to_steam = false, help = false, build_only = false, android = false;
     bool last_part_is_dump = false; // a --license or --zrif belongs to the part before it
     std::vector<std::string> unknown_args;
     for (size_t i = 0; i < ctx.args.size(); i++) {
@@ -322,6 +332,12 @@ int run(Profile &profile, int argc, char *argv[]) {
             importer_options.insert(importer_options.end(), { arg, arg == "--cache" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[i + 1]))) : ctx.args[i + 1] }), i++;
         else if (arg == "--add-to-steam")
             add_to_steam = true;
+        else if (arg == "--android")
+            android = true;
+        else if (arg == "--accept-android-sdk-license" || arg == "--push-only")
+            android_options.push_back(arg);
+        else if ((arg == "--serial" || arg == "--pair" || arg == "--code" || arg == "--connect" || arg == "--apk") && has_value)
+            android_options.insert(android_options.end(), { arg, arg == "--apk" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[i + 1]))) : ctx.args[i + 1] }), i++;
         else if (arg == "--build-only")
             build_only = true;
         else if (arg == "--game" && has_value)
@@ -424,15 +440,27 @@ int run(Profile &profile, int argc, char *argv[]) {
             return std::any_of(profile.other_title_ids.begin(), profile.other_title_ids.end(),
                 [&](const std::string &id) { return fs::exists(settings.vita_fs / "ux0" / "app" / id / "eboot.bin"); });
         };
-        if (add_to_steam || open_importer || !importer_args.empty() || !built()) {
+        if (add_to_steam || android || open_importer || !importer_args.empty() || !built()) {
             if (has_importer(game_dir)) {
-                const bool console = add_to_steam || !importer_args.empty();
+                // --android's device options (anything but --apk and --push-only) mean no window
+                const bool device_given = std::any_of(android_options.begin(), android_options.end(), [](const std::string &o) {
+                    return o == "--serial" || o == "--pair" || o == "--connect";
+                });
+                const bool console = add_to_steam || !importer_args.empty() || (android && device_given);
                 if (console)
                     attach_parent_console();
                 std::vector<std::string> args = add_to_steam ? std::vector<std::string>{ "--add-to-steam" } : importer_args;
                 if (!add_to_steam)
                     args.insert(args.end(), importer_options.begin(), importer_options.end());
+                if (android) {
+                    args.push_back("--android");
+                    args.insert(args.end(), android_options.begin(), android_options.end());
+                    if (console && importer_args.empty())
+                        args.push_back("--console");
+                }
                 const int code = run_importer(game_dir, own_executable(), args, console);
+                if (android)
+                    return code == 2 ? 0 : code < 0 ? 1 : code;
                 if (add_to_steam || code != 0) {
                     if (code < 0)
                         fail(fmt::format("The importer in {} could not be started.", fs_utils::path_to_utf8(game_dir / "setup")));
@@ -442,7 +470,7 @@ int run(Profile &profile, int argc, char *argv[]) {
                 if (build_only)
                     return 0;
                 settings = read_settings();
-            } else if (add_to_steam || open_importer || !importer_args.empty()) {
+            } else if (add_to_steam || android || open_importer || !importer_args.empty()) {
                 fail(fmt::format("{} has no importer (setup/): download the release again to build the game.",
                     fs_utils::path_to_utf8(game_dir)));
                 return 1;

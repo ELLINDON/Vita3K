@@ -36,10 +36,12 @@
 #include <modules/module_parent.h>
 #include <renderer/state.h>
 #include <renderer/texture_cache.h>
+#include <util/fs.h>
 #include <util/log.h>
 #include <util/net_utils.h>
 
 #include <SDL3/SDL.h>
+#include <stb_image_write.h>
 // provides WinMain for the windowed executable, which calls main below
 #include <SDL3/SDL_main.h>
 
@@ -323,13 +325,47 @@ int update_frame_rate(EmuEnvState &emuenv, int fps, int current) {
     return want;
 }
 
-// the game's button-icon atlases (com_001_*) and their PlayStation symbols, all languages
-// (ss-delta tools/button-atlases.py; docs/01-research.md, "Button prompts")
+// the game's textures with PlayStation buttons (the com_001_* icon atlases, tutorial pictures, the
+// font page with the text's symbols) and the symbols in them, all languages (ss-delta
+// tools/button-atlases.py; docs/01-research.md, "Button prompts")
 std::vector<game_frontend::ButtonAtlas> button_atlases() {
     using Symbol = game_frontend::ButtonSymbol;
     return {
 #include "button_atlases.inc"
     };
+}
+
+// --button-labels-test <in> <out>: the labels drawn on the one-texture GXT files in <in> (extracted
+// from the game's archives, tools/lspk.py) as PNGs in <out>, at [display] scale; [gamepad] as set
+int button_labels_test(game_frontend::ButtonLabels &labels, const game_frontend::Settings &settings, const fs::path &in, const fs::path &out) {
+    labels.configure("xbox", settings.gamepad, static_cast<int>(std::lround(settings.scale)));
+    fs::create_directories(out);
+    int written = 0;
+    for (const auto &entry : fs::directory_iterator(in)) {
+        if (entry.path().extension() != ".gxt")
+            continue;
+        std::vector<uint8_t> data;
+        if (!fs_utils::read_data(entry.path(), data) || data.size() < 64)
+            continue;
+        // GXT: magic, version, texture count, ...; the first texture's offset, size, palette, flags,
+        // type, format, width | height << 16
+        uint32_t header[15];
+        std::memcpy(header, data.data(), sizeof(header));
+        const uint32_t offset = header[8], size = header[9], type = header[12];
+        const auto format = static_cast<SceGxmTextureBaseFormat>(header[13] & 0x9f000000u);
+        const uint32_t width = header[14] & 0xffff, height = header[14] >> 16;
+        if (header[2] != 1 || type != SCE_GXM_TEXTURE_SWIZZLED || static_cast<size_t>(offset) + size > data.size() || !labels.wants(format, width, height))
+            continue;
+        std::vector<uint8_t> rgba;
+        uint32_t w = 0, h = 0;
+        if (!labels.make(format, width, height, data.data() + offset, size, rgba, w, h))
+            continue;
+        const fs::path png = out / (fs_utils::path_to_utf8(entry.path().stem()) + ".png");
+        if (stbi_write_png(fs_utils::path_to_utf8(png).c_str(), w, h, 4, rgba.data(), w * 4))
+            written++;
+    }
+    LOG_INFO("--button-labels-test: {} pictures in {}", written, fs_utils::path_to_utf8(out));
+    return written > 0 ? 0 : 1;
 }
 
 // --import-save / --export-save
@@ -348,6 +384,11 @@ int main(int argc, char *argv[]) {
     //   --slot <1-3>               the game's save slot for the two above (default 1)
     //   --quiet                    no message box for the two above (the result is in the log)
     SaveCommand save;
+    std::string labels_test_in, labels_test_out; // --button-labels-test
+    // [game] button_labels: the textures with PlayStation buttons redrawn with Xbox labels as they are
+    // uploaded (the renderer exists from the first ticks, before the game loads them); the settings menu
+    // switches it
+    game_frontend::ButtonLabels button_labels(button_atlases());
     int frame_rate = 30; // what update_frame_rate last set (-1: left alone)
 
     game_frontend::Profile profile;
@@ -366,7 +407,10 @@ int main(int argc, char *argv[]) {
                     "                              old one in ss-delta/save-backups/\n"
                     "  --export-save <folder>      copy a save out\n"
                     "  --slot <1-3>                the game's save slot for the two above (default 1)\n"
-                    "  --quiet                     no message box for the two above (the result is in the log)\n";
+                    "  --quiet                     no message box for the two above (the result is in the log)\n"
+                    "Development:\n"
+                    "  --button-labels-test <in> <out>  the Xbox button labels drawn on the textures (.gxt) in\n"
+                    "                              <in>, as PNGs in <out>; then quit\n";
 
     auto &hooks = profile.hooks;
     hooks.parse_arg = [&](game_frontend::Context &, const std::vector<std::string> &args, size_t &i) {
@@ -378,7 +422,10 @@ int main(int argc, char *argv[]) {
             save.export_to = args[++i];
         else if (arg == "--slot" && has_value)
             save.slot = std::atoi(args[++i].c_str());
-        else if (arg == "--quiet")
+        else if (arg == "--button-labels-test" && i + 2 < args.size()) {
+            labels_test_in = args[++i];
+            labels_test_out = args[++i];
+        } else if (arg == "--quiet")
             save.quiet = true;
         else
             return false;
@@ -389,6 +436,8 @@ int main(int argc, char *argv[]) {
         // the frontend has picked the installed region's title ID by now
         ss_delta::set_save_title(profile.title_id);
         LOG_INFO("Region: {} ({})", region_name(profile.title_id), profile.title_id);
+        if (!labels_test_in.empty())
+            return button_labels_test(button_labels, *ctx.settings, fs_utils::utf8_to_path(labels_test_in), fs_utils::utf8_to_path(labels_test_out));
         if (save.import_from.empty() && save.export_to.empty())
             return std::nullopt;
         const auto &vita_fs = ctx.settings->vita_fs;
@@ -456,16 +505,17 @@ int main(int argc, char *argv[]) {
         if (full_3d)
             emuenv.gxm.on_program_registered = unscale_depth_uvs;
     };
-    // [game] button_labels: the button atlases redrawn with Xbox labels as they are uploaded (the
-    // renderer exists from the first ticks, before the game loads them); the settings menu switches it
-    game_frontend::ButtonLabels button_labels(button_atlases());
     hooks.on_tick = [&](game_frontend::Context &ctx) {
         const int fps = ctx.settings->values.get_int("display.frame_rate");
         if (fps != 30 && frame_rate != -1)
             frame_rate = update_frame_rate(*ctx.emuenv, fps, frame_rate);
         if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
-            const bool changed = button_labels.configure(ctx.settings->values.get("game.button_labels"), ctx.settings->gamepad,
-                static_cast<int>(std::lround(ctx.settings->scale)));
+            // auto: from the first connected gamepad's own labels (it may change while the game runs)
+            std::string style = ctx.settings->values.get("game.button_labels");
+            std::map<std::string, std::string> face;
+            if (style == "auto")
+                style = game_frontend::auto_button_style(ctx.emuenv->ctrl, face);
+            const bool changed = button_labels.configure(style, ctx.settings->gamepad, static_cast<int>(std::lround(ctx.settings->scale)), face);
             if (cache->texture_override.load() != &button_labels) {
                 cache->texture_override = &button_labels;
                 cache->refresh_texture_override();

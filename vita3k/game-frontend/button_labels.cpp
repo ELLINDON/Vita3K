@@ -17,9 +17,12 @@
 
 #include "button_labels.h"
 
+#include <ctrl/state.h>
 #include <gxm/types.h>
 #include <renderer/functions.h>
 #include <util/log.h>
+
+#include <SDL3/SDL_gamepad.h>
 
 #include <algorithm>
 #include <cctype>
@@ -29,9 +32,9 @@ namespace game_frontend {
 
 namespace {
 
-// The letters, drawn as strokes of one width (no font): x right, y down, in units of the letter's
-// height; arcs by their centre, radius and angles in degrees (0 right, 90 down). Like the game's own
-// symbols, which are white strokes in an ink blot.
+// The letters and symbols, drawn as strokes of one width (no font): x right, y down, in units of the
+// glyph's height; arcs by their centre, radius and angles in degrees (0 right, 90 down). Like the
+// game's own symbols, which are light strokes in an ink blot.
 struct Stroke {
     bool arc;
     float a, b, c, d, e; // line: (a, b)-(c, d); arc: centre (a, b), radius c, angles d..e
@@ -41,7 +44,7 @@ struct Glyph {
     std::vector<Stroke> strokes;
 };
 
-constexpr float STROKE = 0.19f; // the strokes' width
+constexpr float STROKE = 0.19f; // the letters' strokes' width
 constexpr float T = STROKE / 2, B = 1 - STROKE / 2, M = 0.5f; // the strokes' top, bottom and middle
 constexpr float BOWL = (M - T) / 2; // the radius of B's, R's and S's bowls
 constexpr float GAP = 0.1f; // between two letters
@@ -62,6 +65,13 @@ const Glyph *glyph(char c) {
         g['R'] = { 0.64f, { line(T, T, T, B), line(T, T, b1, T), arc(b1, T + BOWL, BOWL, -90, 90), line(b1, M, T, M), line(0.28f, M, 0.64f - T, B) } };
         const float sx = 0.31f; // S's bowls' centres
         g['S'] = { sx + BOWL + T, { arc(sx, T + BOWL, BOWL, 90, 330), arc(sx, M + BOWL, BOWL, -90, 150) } };
+        // Xbox's Menu button (three lines) and View button (two overlapping windows)
+        g['='] = { 1.f, { line(T, 0.2f, 1 - T, 0.2f), line(T, M, 1 - T, M), line(T, 0.8f, 1 - T, 0.8f) } };
+        const float v0 = 0.62f, v1 = 0.38f;
+        g['%'] = { 1.f, { line(T, T, v0, T), line(v0, T, v0, v1), line(T, T, T, v0), line(T, v0, v1, v0), // the back window, behind
+                            line(v1, v1, B, v1), line(B, v1, B, B), line(B, B, v1, B), line(v1, B, v1, v1) } };
+        // a ring, around a font page's letters
+        g['o'] = { 1.f, { arc(M, M, M - T, 0, 360) } };
         return g;
     }();
     const auto it = glyphs.find(c);
@@ -100,64 +110,76 @@ float text_width(const std::string &text) {
     return w + GAP * (text.size() > 1 ? text.size() - 1 : 0);
 }
 
-// draws `label` centred on (cx, cy), `height` pixels tall, into an RGBA image
-void draw_text(std::vector<uint8_t> &img, uint32_t w, uint32_t h, float cx, float cy, float height, const ButtonLabels::Label &label) {
-    float x = cx - text_width(label.text) * height / 2;
+struct Image {
+    std::vector<uint8_t> &px; // RGBA
+    uint32_t w, h;
+    uint8_t *at(uint32_t x, uint32_t y) { return &px[(static_cast<size_t>(y) * w + x) * 4]; }
+};
+
+// draws `text` centred on (cx, cy), `height` pixels tall and `xscale` times as wide as drawn upright,
+// with strokes `stroke` of the height wide, in (r, g, b)
+void draw_text(Image &img, float cx, float cy, float height, float xscale, float stroke, const std::string &text, uint8_t r, uint8_t g, uint8_t b) {
+    const float hx = height * xscale; // a glyph unit across, in pixels
+    float x = cx - text_width(text) * hx / 2;
     const float top = cy - height / 2;
-    for (const char c : label.text) {
-        const Glyph *g = glyph(c);
-        if (!g)
+    for (const char c : text) {
+        const Glyph *gl = glyph(c);
+        if (!gl)
             continue;
         const int x0 = std::max(0, static_cast<int>(std::floor(x)) - 1);
-        const int x1 = std::min<int>(w, static_cast<int>(std::ceil(x + g->width * height)) + 1);
+        const int x1 = std::min<int>(img.w, static_cast<int>(std::ceil(x + gl->width * hx)) + 1);
         const int y0 = std::max(0, static_cast<int>(std::floor(top)) - 1);
-        const int y1 = std::min<int>(h, static_cast<int>(std::ceil(top + height)) + 1);
+        const int y1 = std::min<int>(img.h, static_cast<int>(std::ceil(top + height)) + 1);
         for (int py = y0; py < y1; py++) {
             for (int px = x0; px < x1; px++) {
-                // the pixel's centre in the letter's units
-                const float u = (px + 0.5f - x) / height, v = (py + 0.5f - top) / height;
+                // the pixel's centre in the glyph's units
+                const float u = (px + 0.5f - x) / hx, v = (py + 0.5f - top) / height;
                 float d = 1e9f;
-                for (const auto &s : g->strokes)
+                for (const auto &s : gl->strokes)
                     d = std::min(d, stroke_distance(s, u, v));
-                const float cover = std::clamp((STROKE / 2 - d) * height + 0.5f, 0.f, 1.f);
+                const float cover = std::clamp((stroke / 2 - d) * std::min(height, hx) + 0.5f, 0.f, 1.f);
                 if (cover <= 0)
                     continue;
-                uint8_t *p = &img[(static_cast<size_t>(py) * w + px) * 4];
-                p[0] = static_cast<uint8_t>(std::lround(p[0] + (label.r - p[0]) * cover));
-                p[1] = static_cast<uint8_t>(std::lround(p[1] + (label.g - p[1]) * cover));
-                p[2] = static_cast<uint8_t>(std::lround(p[2] + (label.b - p[2]) * cover));
+                uint8_t *p = img.at(px, py);
+                p[0] = static_cast<uint8_t>(std::lround(p[0] + (r - p[0]) * cover));
+                p[1] = static_cast<uint8_t>(std::lround(p[1] + (g - p[1]) * cover));
+                p[2] = static_cast<uint8_t>(std::lround(p[2] + (b - p[2]) * cover));
                 p[3] = std::max<uint8_t>(p[3], static_cast<uint8_t>(std::lround(cover * 255)));
             }
         }
-        x += (g->width + GAP) * height;
+        x += (gl->width + GAP) * hx;
     }
 }
 
-// the label a gamepad button ([gamepad]'s names, SDL's) shows; empty text: none
-ButtonLabels::Label label_of(std::string button) {
-    std::transform(button.begin(), button.end(), button.begin(), [](unsigned char c) { return std::tolower(c); });
-    struct Entry {
-        const char *name, *text;
-        uint8_t r, g, b;
+std::string lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+    return s;
+}
+
+// the label a gamepad button ([gamepad]'s names, SDL's) shows; empty text: none. face: the face
+// buttons' letters by position where they differ from an Xbox pad's
+ButtonLabels::Label label_of(const std::string &name, const std::map<std::string, std::string> &face) {
+    std::string button = lower(name);
+    static const std::map<std::string, std::string> aliases{ { "a", "south" }, { "b", "east" }, { "x", "west" }, { "y", "north" } };
+    if (const auto it = aliases.find(button); it != aliases.end())
+        button = it->second;
+    static const std::map<std::string, std::string> xbox_face{ { "south", "A" }, { "east", "B" }, { "west", "X" }, { "north", "Y" } };
+    if (const auto it = xbox_face.find(button); it != xbox_face.end()) {
+        const auto f = face.find(button);
+        const std::string letter = f != face.end() ? f->second : it->second;
+        // in the colours of the letters on an Xbox pad
+        static const std::map<std::string, ButtonLabels::Label> colours{
+            { "A", { "A", 110, 200, 70 } }, { "B", { "B", 235, 75, 60 } }, { "X", { "X", 70, 150, 240 } }, { "Y", { "Y", 245, 200, 50 } }
+        };
+        const auto c = colours.find(letter);
+        return c != colours.end() ? c->second : ButtonLabels::Label{};
+    }
+    static const std::map<std::string, std::string> others{
+        { "leftshoulder", "LB" }, { "rightshoulder", "RB" }, { "leftstick", "LS" }, { "rightstick", "RS" },
+        { "start", "=" }, { "back", "%" }
     };
-    // the face buttons in the colours of their letters on an Xbox pad, the rest white
-    static const Entry entries[] = {
-        { "south", "A", 110, 200, 70 },
-        { "a", "A", 110, 200, 70 },
-        { "east", "B", 235, 75, 60 },
-        { "b", "B", 235, 75, 60 },
-        { "west", "X", 70, 150, 240 },
-        { "x", "X", 70, 150, 240 },
-        { "north", "Y", 245, 200, 50 },
-        { "y", "Y", 245, 200, 50 },
-        { "leftshoulder", "LB", 240, 240, 240 },
-        { "rightshoulder", "RB", 240, 240, 240 },
-        { "leftstick", "LS", 240, 240, 240 },
-        { "rightstick", "RS", 240, 240, 240 },
-    };
-    for (const auto &e : entries)
-        if (button == e.name)
-            return { e.text, e.r, e.g, e.b };
+    if (const auto it = others.find(button); it != others.end())
+        return { it->second, 240, 240, 240 };
     return {};
 }
 
@@ -165,6 +187,25 @@ std::string trim(const std::string &s) {
     const auto b = s.find_first_not_of(" \t");
     const auto e = s.find_last_not_of(" \t");
     return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+}
+
+// a symbol's usual width / height: a box narrower than that is a symbol drawn squeezed
+float natural_aspect(ButtonSymbol s) {
+    switch (s) {
+    case ButtonSymbol::Triangle: return 1.15f;
+    case ButtonSymbol::L: return 0.67f;
+    case ButtonSymbol::R: return 0.75f;
+    default: return 1.f;
+    }
+}
+
+uint32_t level_size(uint32_t format, uint32_t width, uint32_t height) {
+    switch (format) {
+    case SCE_GXM_TEXTURE_BASE_FORMAT_UBC1: return width * height / 2; // 8 bytes per 4x4 block
+    case SCE_GXM_TEXTURE_BASE_FORMAT_UBC3: return width * height; // 16 bytes per 4x4 block
+    case SCE_GXM_TEXTURE_BASE_FORMAT_U8: return width * height;
+    default: return 0;
+    }
 }
 
 } // namespace
@@ -177,82 +218,130 @@ uint64_t fnv1a64(const uint8_t *data, size_t size) {
 }
 
 SettingSpec button_labels_setting() {
-    SettingSpec s{ "button_labels", SettingSpec::Kind::Choice, "playstation", 0, 0, { "playstation", "xbox" },
-        "The buttons the game's prompts show: playstation (the game's own icons) or xbox (A, B, X, Y,\n"
-        "LB, RB: the gamepad button that [gamepad] binds to each Vita button). For now the face buttons\n"
-        "and L/R; the D-pad, sticks, START/SELECT and tutorial pictures keep their PlayStation icons." };
+    SettingSpec s{ "button_labels", SettingSpec::Kind::Choice, "playstation", 0, 0, { "playstation", "xbox", "auto" },
+        "The buttons the game's prompts show: playstation (the game's own icons), xbox (A, B, X, Y, LB,\n"
+        "RB, and Xbox's Menu and View for START and SELECT: the gamepad button that [gamepad] binds to\n"
+        "each Vita button), or auto (xbox while the first gamepad has lettered buttons, with its own\n"
+        "letters; playstation for a PlayStation pad or none). Also in the tutorial pictures and the\n"
+        "text's few button symbols. The D-pad, the sticks and TOUCH are the same on both." };
     s.live = true;
     s.title = "Button prompts";
-    s.choice_labels = { "PlayStation", "Xbox" };
+    s.choice_labels = { "PlayStation", "Xbox", "As the gamepad" };
     return s;
+}
+
+std::string auto_button_style(const CtrlState &ctrl, std::map<std::string, std::string> &face) {
+    face.clear();
+    const Controller *first = nullptr;
+    for (const auto &[_, c] : ctrl.controllers)
+        if (c.controller && (!first || c.port < first->port))
+            first = &c;
+    if (!first)
+        return "playstation";
+    static const std::pair<const char *, SDL_GamepadButton> positions[] = {
+        { "south", SDL_GAMEPAD_BUTTON_SOUTH }, { "east", SDL_GAMEPAD_BUTTON_EAST },
+        { "west", SDL_GAMEPAD_BUTTON_WEST }, { "north", SDL_GAMEPAD_BUTTON_NORTH }
+    };
+    for (const auto &[position, button] : positions) {
+        switch (SDL_GetGamepadButtonLabel(first->controller.get(), button)) {
+        case SDL_GAMEPAD_BUTTON_LABEL_A: face[position] = "A"; break;
+        case SDL_GAMEPAD_BUTTON_LABEL_B: face[position] = "B"; break;
+        case SDL_GAMEPAD_BUTTON_LABEL_X: face[position] = "X"; break;
+        case SDL_GAMEPAD_BUTTON_LABEL_Y: face[position] = "Y"; break;
+        case SDL_GAMEPAD_BUTTON_LABEL_CROSS:
+        case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE:
+        case SDL_GAMEPAD_BUTTON_LABEL_SQUARE:
+        case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE:
+            face.clear();
+            return "playstation";
+        default:
+            break;
+        }
+    }
+    return "xbox";
 }
 
 ButtonLabels::ButtonLabels(std::vector<ButtonAtlas> atlases)
     : m_atlases(std::move(atlases)) {
     for (const auto &a : m_atlases)
-        m_sizes.insert({ a.width, a.height });
+        m_kinds.insert({ a.format, a.width, a.height });
 }
 
-bool ButtonLabels::configure(const std::string &style, const std::map<std::string, std::string> &gamepad, int scale) {
+bool ButtonLabels::configure(const std::string &style, const std::map<std::string, std::string> &gamepad, int scale,
+    const std::map<std::string, std::string> &face) {
     scale = std::clamp(scale, 1, 4);
     std::lock_guard lock(m_mutex);
-    if (style == m_style && gamepad == m_gamepad && scale == m_scale)
+    if (style == m_style && gamepad == m_gamepad && scale == m_scale && face == m_face)
         return false;
     const bool was_enabled = m_style == "xbox";
     m_style = style;
     m_gamepad = gamepad;
     m_scale = scale;
+    m_face = face;
     // Vita3K's own bindings for a Vita button [gamepad] leaves out (input.cpp)
-    static const std::map<std::string, std::string> defaults{
-        { "square", "west" }, { "circle", "east" }, { "cross", "south" }, { "triangle", "north" },
-        { "l", "leftshoulder" }, { "r", "rightshoulder" }
-    };
-    static const std::pair<ButtonSymbol, const char *> buttons[] = {
-        { ButtonSymbol::Square, "square" }, { ButtonSymbol::Circle, "circle" }, { ButtonSymbol::Cross, "cross" },
-        { ButtonSymbol::Triangle, "triangle" }, { ButtonSymbol::L, "l" }, { ButtonSymbol::R, "r" }
+    static const std::pair<ButtonSymbol, std::pair<const char *, const char *>> buttons[] = {
+        { ButtonSymbol::Square, { "square", "west" } }, { ButtonSymbol::Circle, { "circle", "east" } },
+        { ButtonSymbol::Cross, { "cross", "south" } }, { ButtonSymbol::Triangle, { "triangle", "north" } },
+        { ButtonSymbol::L, { "l", "leftshoulder" } }, { ButtonSymbol::R, { "r", "rightshoulder" } },
+        { ButtonSymbol::Start, { "start", "start" } }, { ButtonSymbol::Select, { "select", "back" } }
     };
     m_labels.clear();
-    for (const auto &[symbol, name] : buttons) {
-        const auto it = gamepad.find(name);
+    for (const auto &[symbol, names] : buttons) {
+        const auto it = gamepad.find(names.first);
         std::string bound = it != gamepad.end() ? trim(it->second.substr(0, it->second.find(','))) : std::string();
         if (bound.empty())
-            bound = defaults.at(name);
-        const Label label = label_of(bound);
+            bound = names.second;
+        const Label label = label_of(bound, face);
         if (!label.text.empty())
             m_labels[symbol] = label;
     }
     const bool enabled = style == "xbox";
     m_enabled = enabled;
-    LOG_INFO("Button labels: {}{}", enabled ? "Xbox" : "PlayStation", enabled ? fmt::format(" (at {}x)", scale) : "");
+    std::string letters;
+    for (const auto &[position, letter] : face)
+        letters += letter;
+    LOG_INFO("Button labels: {}{}", enabled ? "Xbox" : "PlayStation",
+        enabled ? fmt::format(" (at {}x{})", scale, letters.empty() ? "" : ", face buttons " + letters) : "");
     return enabled || was_enabled;
 }
 
 bool ButtonLabels::wants(SceGxmTextureBaseFormat format, uint32_t width, uint32_t height) const {
-    return m_enabled.load(std::memory_order_relaxed) && format == SCE_GXM_TEXTURE_BASE_FORMAT_UBC3
-        && m_sizes.contains({ static_cast<uint16_t>(width), static_cast<uint16_t>(height) });
+    return m_enabled.load(std::memory_order_relaxed)
+        && m_kinds.contains({ static_cast<uint32_t>(format), static_cast<uint16_t>(width), static_cast<uint16_t>(height) });
 }
 
 bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t height, const uint8_t *data, uint32_t size,
     std::vector<uint8_t> &rgba, uint32_t &out_width, uint32_t &out_height) {
-    const uint32_t level_size = width * height; // UBC3: 16 bytes per 4x4 block
-    if (size < level_size)
+    const uint32_t bytes = level_size(format, width, height);
+    if (!bytes || size < bytes)
         return false;
-    const uint64_t hash = fnv1a64(data, level_size);
+    const uint64_t hash = fnv1a64(data, bytes);
     const auto atlas = std::find_if(m_atlases.begin(), m_atlases.end(), [&](const ButtonAtlas &a) {
-        return a.hash == hash && a.width == width && a.height == height;
+        return a.hash == hash && a.format == format && a.width == width && a.height == height;
     });
     std::lock_guard lock(m_mutex);
     if (atlas == m_atlases.end() || m_style != "xbox") {
         if (atlas == m_atlases.end() && m_logged.insert(hash).second)
-            LOG_DEBUG("Button labels: {}x{} texture {:016x} is not a button atlas", width, height, hash);
+            LOG_DEBUG("Button labels: {}x{} texture {:016x} has no buttons we know", width, height, hash);
         return false;
     }
+    const bool font = format == SCE_GXM_TEXTURE_BASE_FORMAT_U8;
 
-    // the atlas as the game draws it: unswizzled, decoded, scaled up (bilinear)
-    std::vector<uint8_t> blocks(level_size);
-    renderer::texture::resolve_z_order_compressed_texture(format, blocks.data(), data, width, height);
+    // the texture as the game draws it: unswizzled, decoded (a font page: white, its value as alpha),
+    // scaled up (bilinear)
     std::vector<uint8_t> src(static_cast<size_t>(width) * height * 4);
-    renderer::texture::decompress_compressed_texture(format, src.data(), blocks.data(), width, height);
+    if (font) {
+        std::vector<uint8_t> linear(bytes);
+        renderer::texture::swizzled_texture_to_linear_texture(linear.data(), data, width, height, 8);
+        for (size_t i = 0; i < linear.size(); i++) {
+            src[i * 4] = src[i * 4 + 1] = src[i * 4 + 2] = 255;
+            src[i * 4 + 3] = linear[i];
+        }
+    } else {
+        std::vector<uint8_t> blocks(bytes);
+        renderer::texture::resolve_z_order_compressed_texture(format, blocks.data(), data, width, height);
+        renderer::texture::decompress_compressed_texture(format, src.data(), blocks.data(), width, height);
+    }
     const uint32_t s = static_cast<uint32_t>(m_scale);
     const uint32_t w = width * s, h = height * s;
     rgba.assign(static_cast<size_t>(w) * h * 4, 0);
@@ -272,12 +361,28 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
             }
         }
     }
+    Image img{ rgba, w, h };
 
     int drawn = 0;
     for (const auto &slot : atlas->slots) {
         const auto label = m_labels.find(slot.symbol);
         if (label == m_labels.end())
             continue;
+        if (font) {
+            // the glyph's cell, emptied; a ring with the letter in it, white (the text's colour comes
+            // from the game)
+            for (uint32_t y = slot.y * s; y < std::min<uint32_t>(slot.y + slot.h, height) * s; y++)
+                for (uint32_t x = slot.x * s; x < std::min<uint32_t>(slot.x + slot.w, width) * s; x++)
+                    img.at(x, y)[3] = 0;
+            const float ring = std::min(slot.w, slot.h) * 0.96f * s;
+            const float cx = (slot.x + slot.w / 2.f) * s, cy = (slot.y + slot.h / 2.f) * s;
+            draw_text(img, cx, cy, ring, 1, std::max(0.07f, 1.4f * s / ring), "o", 255, 255, 255);
+            const float letters = ring * 0.48f;
+            draw_text(img, cx, cy, letters, label->second.text.size() > 1 ? 0.8f : 1.f, std::max(STROKE, 1.4f * s / letters),
+                label->second.text, 255, 255, 255);
+            drawn++;
+            continue;
+        }
         // the ink around the symbol (its dark, opaque pixels, two to four pixels out): the colour the
         // symbol is painted over with
         uint32_t ink[3] = { 0, 0, 0 }, count = 0;
@@ -297,17 +402,30 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
         for (auto &c : ink)
             c = count ? c / count : 0;
         // the symbol and a pixel around it (its soft edge)
-        const uint32_t ex0 = (std::max(slot.x - 1, 0)) * s, ey0 = (std::max(slot.y - 1, 0)) * s;
+        const uint32_t ex0 = std::max(slot.x - 1, 0) * s, ey0 = std::max(slot.y - 1, 0) * s;
         const uint32_t ex1 = std::min<uint32_t>(slot.x + slot.w + 1, width) * s, ey1 = std::min<uint32_t>(slot.y + slot.h + 1, height) * s;
         for (uint32_t y = ey0; y < ey1; y++)
             for (uint32_t x = ex0; x < ex1; x++)
                 for (int c = 0; c < 3; c++)
-                    rgba[(static_cast<size_t>(y) * w + x) * 4 + c] = static_cast<uint8_t>(ink[c]);
-        // the letters, as tall as the symbol (a face symbol: as its larger side, it is about square)
-        const bool letter_symbol = slot.symbol == ButtonSymbol::L || slot.symbol == ButtonSymbol::R;
-        const float letter = static_cast<float>(letter_symbol ? slot.h : std::max(slot.w, slot.h)) * s;
-        draw_text(rgba, w, h, (slot.x + slot.w / 2.f) * s, (slot.y + slot.h / 2.f) * s, letter, label->second);
+                    img.at(x, y)[c] = static_cast<uint8_t>(ink[c]);
+        // the letters, as tall as the symbol (START and SELECT: their Xbox symbol, half again as tall
+        // as the word), as narrow as a symbol drawn squeezed
+        const ButtonSymbol sym = slot.symbol;
+        const bool word = sym == ButtonSymbol::Start || sym == ButtonSymbol::Select;
+        const float aspect = static_cast<float>(slot.w) / slot.h, natural = natural_aspect(sym);
+        const bool face = sym != ButtonSymbol::L && sym != ButtonSymbol::R && !word;
+        const float tall = word ? slot.h * 1.5f : (face && aspect >= natural ? std::max(slot.w, slot.h) : slot.h);
+        const float xscale = word ? 1.f : std::clamp(aspect / natural, 0.4f, 1.f);
+        const Label &l = label->second;
+        draw_text(img, (slot.x + slot.w / 2.f) * s, (slot.y + slot.h / 2.f) * s, tall * s, xscale, STROKE, l.text, l.r, l.g, l.b);
         drawn++;
+    }
+    if (font) {
+        // back to the font page's layout: its value in R, G and B (the 1RRR swizzle), opaque
+        for (size_t i = 0; i < rgba.size(); i += 4) {
+            rgba[i] = rgba[i + 1] = rgba[i + 2] = rgba[i + 3];
+            rgba[i + 3] = 255;
+        }
     }
     if (m_logged.insert(hash).second)
         LOG_INFO("Button labels: {} redrawn ({} of {} symbols)", atlas->name, drawn, atlas->slots.size());

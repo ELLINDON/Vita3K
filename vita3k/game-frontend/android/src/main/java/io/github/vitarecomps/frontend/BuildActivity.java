@@ -65,27 +65,37 @@ import java.util.List;
  *              service the player may leave)
  *
  * SetupActivity opens it while the game isn't built here, or when the modules were built by an older
- * version of the app (android-build.json's stamp: the APK's version and its tools).
+ * version of the app (android-build.json's stamp: the APK's version and its tools). Once the game is
+ * built, the launcher's "Add an add-on" shortcut opens it for one more step on its own:
+ *
+ *   add-on     an add-on (DLC) the player picks installed into the game built here (the front end's
+ *              --install-content), with nothing built again
  */
 public class BuildActivity extends Activity {
     private static final String TAG = "BuildActivity";
     private static final String PREFS = "build";
-    private static final String KEY_STEP = "step", KEY_PARTS = "parts";
-    private static final int REQUEST_PICK_PART = 1, REQUEST_PICK_LICENSE = 2, REQUEST_STEP = 3;
+    private static final String KEY_STEP = "step", KEY_PARTS = "parts", KEY_ADDON = "addon";
+    static final String EXTRA_ADD_ADDON = "add_addon";
+    private static final int REQUEST_PICK_PART = 1, REQUEST_PICK_LICENSE = 2, REQUEST_STEP = 3,
+        REQUEST_PICK_ADDON = 4, REQUEST_PICK_ADDON_LICENSE = 5;
 
-    private static final int PICK = 0, FIRMWARE = 1, INSTALL_FIRMWARE = 2, INSTALL_GAME = 3, CHECK = 4, DUMP = 5, BUILD = 6;
+    private static final int PICK = 0, FIRMWARE = 1, INSTALL_FIRMWARE = 2, INSTALL_GAME = 3, CHECK = 4, DUMP = 5, BUILD = 6,
+        INSTALL_ADDON = 7;
     private static final String[] STEP_NAMES = { "", "Downloading the firmware", "Installing the firmware",
-        "Installing the game", "Checking the game's version", "Running the game to find its code", "Building the native code" };
+        "Installing the game", "Checking the game's version", "Running the game to find its code", "Building the native code",
+        "Installing the add-on" };
 
     static volatile boolean visible = false;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextView partsView, stepView, errorView, logView;
     private final List<View> formViews = new ArrayList<>(); // the intro and the file picking: hidden while setting up
-    private Button addButton, licenseButton, clearButton, buildButton, retryButton, playButton, startOverButton;
+    private Button addButton, licenseButton, clearButton, buildButton, retryButton, playButton, startOverButton, addonButton;
     private ScrollView logScroll;
     private int step;
     private JSONArray parts;
+    private JSONObject addon; // the add-on being installed (INSTALL_ADDON): uri, name, license
+    private String notice; // what the last add-on step did, shown while the game is built
     private long serviceGeneration = -1; // the BuildService command this screen waits for
     private boolean rebuild; // the game is installed and its modules dumped: only the build is needed
     private JSONObject game; // game.json
@@ -157,6 +167,11 @@ public class BuildActivity extends Activity {
         } catch (Exception e) {
             parts = new JSONArray();
         }
+        try {
+            addon = prefs.contains(KEY_ADDON) ? new JSONObject(prefs.getString(KEY_ADDON, "{}")) : null;
+        } catch (Exception e) {
+            addon = null;
+        }
 
         int pad = dp(24);
         LinearLayout column = new LinearLayout(this);
@@ -172,7 +187,8 @@ public class BuildActivity extends Activity {
               + "dump isn't needed (add it only to install the game again)."
             : "The game is built on this device from your own copy of it: a dump of the PS Vita game (a NoNpDrm .zip "
               + "or .vpk; zip a dumped folder first), or a .pkg with its licence file (work.bin or .rif). Add the "
-              + "game's last update after it if the dump lacks it (its .pkg). The PS Vita firmware comes from Sony's "
+              + "game's last update after it if the dump lacks it (its .pkg), and add-ons (DLC) the same way; an "
+              + "add-on can also be added later, from the app icon's long-press menu. The PS Vita firmware comes from Sony's "
               + "servers (190 MB).\n\n"
               + "Building takes about 15 minutes on a fast device and needs about 10 GB of free space (5 GB of it "
               + "only while building). Keep the device charging. Nothing leaves the device.", 15, false);
@@ -215,9 +231,11 @@ public class BuildActivity extends Activity {
             }
             refresh();
         });
+        addonButton = button("Add an add-on…", v -> pick(REQUEST_PICK_ADDON));
         actions.addView(buildButton);
         actions.addView(retryButton);
         actions.addView(playButton);
+        actions.addView(addonButton);
         actions.addView(startOverButton);
         column.addView(actions);
 
@@ -242,15 +260,19 @@ public class BuildActivity extends Activity {
         page.addView(column);
         setContentView(page);
         // the app was closed during one of the front end's steps: the player goes on with Try again
-        if (step == INSTALL_FIRMWARE || step == INSTALL_GAME || step == DUMP) {
+        if (step == INSTALL_FIRMWARE || step == INSTALL_GAME || step == DUMP || step == INSTALL_ADDON) {
             synchronized (BuildService.state) {
                 if (BuildService.state.error == null)
                     BuildService.state.error = STEP_NAMES[step] + " was interrupted: Try again goes on from there.";
             }
         }
         refresh();
+        boolean built = step == PICK && !needsSetup(this);
+        // from the "Add an add-on" shortcut, with the game built: the file picker straight away
+        if (built && savedInstanceState == null && getIntent().getBooleanExtra(EXTRA_ADD_ADDON, false))
+            pick(REQUEST_PICK_ADDON);
         // where a gamepad's first press lands (a focus requested before layout, in touch mode, is lost)
-        page.post(() -> (parts.length() == 0 ? addButton : buildButton).requestFocus());
+        page.post(() -> (built ? addonButton : parts.length() == 0 ? addButton : buildButton).requestFocus());
     }
 
     @Override
@@ -318,7 +340,11 @@ public class BuildActivity extends Activity {
                 list.append("  (licence: ").append(p.optString("license_name")).append(")");
             list.append('\n');
         }
-        partsView.setText(parts.length() == 0 ? "No files chosen yet." : (busy ? "From:\n" : "") + list.toString().trim());
+        if (step == INSTALL_ADDON && addon != null)
+            partsView.setText("From:\n" + addon.optString("name")
+                + (addon.optString("license_name").isEmpty() ? "" : "  (licence: " + addon.optString("license_name") + ")"));
+        else
+            partsView.setText(parts.length() == 0 ? "No files chosen yet." : (busy ? "From:\n" : "") + list.toString().trim());
         boolean lastIsPkg = parts.length() > 0 && parts.optJSONObject(parts.length() - 1).optString("name").toLowerCase().endsWith(".pkg");
         addButton.setEnabled(!busy);
         licenseButton.setEnabled(!busy && lastIsPkg);
@@ -329,14 +355,16 @@ public class BuildActivity extends Activity {
         boolean built = !busy && !needsSetup(this);
         for (View v : formViews)
             v.setVisibility(busy || built ? View.GONE : View.VISIBLE);
-        partsView.setVisibility(built || (busy && parts.length() == 0) ? View.GONE : View.VISIBLE);
+        partsView.setVisibility(step == INSTALL_ADDON ? View.VISIBLE
+            : built || (busy && parts.length() == 0) ? View.GONE : View.VISIBLE);
         buildButton.setVisibility(busy ? View.GONE : View.VISIBLE);
+        addonButton.setVisibility(built ? View.VISIBLE : View.GONE);
         boolean stopped = busy && !running && !waitingForStep && error != null;
         retryButton.setVisibility(stopped ? View.VISIBLE : View.GONE);
         startOverButton.setVisibility(busy && !running && !waitingForStep ? View.VISIBLE : View.GONE);
         playButton.setVisibility(View.GONE);
         if (!busy)
-            stepView.setText(needsSetup(this) ? "" : "The game is built.");
+            stepView.setText(needsSetup(this) ? "" : notice != null ? notice : "The game is built.");
         else if (running && step == BUILD)
             stepView.setText(serviceStep);
         else
@@ -352,7 +380,26 @@ public class BuildActivity extends Activity {
     }
 
     private void save() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_STEP, step).putString(KEY_PARTS, parts.toString()).apply();
+        SharedPreferences.Editor edit = getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_STEP, step)
+            .putString(KEY_PARTS, parts.toString());
+        if (addon != null)
+            edit.putString(KEY_ADDON, addon.toString());
+        else
+            edit.remove(KEY_ADDON);
+        edit.apply();
+    }
+
+    /** The add-on picked (and, for a pkg, its licence): installed into the game built here. */
+    private void startAddon() {
+        BuildService.logFile(this).delete();
+        synchronized (BuildService.state) {
+            BuildService.state.lines.clear();
+            BuildService.state.error = null;
+        }
+        notice = null;
+        step = INSTALL_ADDON;
+        save();
+        run();
     }
 
     // --- picking the dump ---------------------------------------------------------------------
@@ -381,6 +428,17 @@ public class BuildActivity extends Activity {
             waitingForStep = false;
             int code = data != null ? data.getIntExtra(FrontendStepActivity.EXTRA_EXIT_CODE, -1) : -1;
             BuildService.append(this, STEP_NAMES[step] + ": exit " + code);
+            if (step == INSTALL_ADDON && resultCode == RESULT_OK && code == 0) {
+                // the game stays as it was built: back to Play, with what was installed
+                notice = "Installed: " + (addon != null ? addon.optString("name") : "the add-on")
+                    + ". The game is built.";
+                addon = null;
+                step = PICK;
+                save();
+                refresh();
+                playButton.requestFocus();
+                return;
+            }
             if (resultCode == RESULT_OK && code == 0) {
                 step++;
                 save();
@@ -393,7 +451,14 @@ public class BuildActivity extends Activity {
             }
             return;
         }
-        if (resultCode != RESULT_OK || data == null || data.getData() == null)
+        boolean picked = resultCode == RESULT_OK && data != null && data.getData() != null;
+        // a pkg add-on's licence not given: installed anyway, with the licence the game's install left
+        // (the front end says when there is none)
+        if (requestCode == REQUEST_PICK_ADDON_LICENSE && !picked && addon != null) {
+            startAddon();
+            return;
+        }
+        if (!picked)
             return;
         Uri uri = data.getData();
         try {
@@ -402,7 +467,21 @@ public class BuildActivity extends Activity {
             Log.w(TAG, "no persistable permission for " + uri, e);
         }
         try {
-            if (requestCode == REQUEST_PICK_PART) {
+            if (requestCode == REQUEST_PICK_ADDON) {
+                addon = new JSONObject().put("uri", uri.toString()).put("name", displayName(uri));
+                if (addon.optString("name").toLowerCase(java.util.Locale.ROOT).endsWith(".pkg")) {
+                    // a pkg needs its licence: the picker again, for its work.bin or .rif
+                    notice = "Now pick the licence of " + addon.optString("name") + " (work.bin or .rif).";
+                    refresh();
+                    pick(REQUEST_PICK_ADDON_LICENSE);
+                } else
+                    startAddon();
+                return;
+            } else if (requestCode == REQUEST_PICK_ADDON_LICENSE && addon != null) {
+                addon.put("license", uri.toString()).put("license_name", displayName(uri));
+                startAddon();
+                return;
+            } else if (requestCode == REQUEST_PICK_PART) {
                 parts.put(new JSONObject().put("uri", uri.toString()).put("name", displayName(uri)));
             } else if (requestCode == REQUEST_PICK_LICENSE && parts.length() > 0) {
                 JSONObject last = parts.getJSONObject(parts.length() - 1);
@@ -475,6 +554,22 @@ public class BuildActivity extends Activity {
         case BUILD:
             service(new String[] { "build", game.getPath(), work().getPath(), BuildTools.toolchain(this).getPath(), "--stamp", stamp(this) });
             break;
+        case INSTALL_ADDON: {
+            if (addon == null) {
+                step = PICK;
+                save();
+                break;
+            }
+            List<String> args = new ArrayList<>();
+            args.add("--install-content");
+            args.add(addon.optString("uri"));
+            if (!addon.optString("license").isEmpty()) {
+                args.add("--license");
+                args.add(addon.optString("license"));
+            }
+            frontend(args.toArray(new String[0]));
+            break;
+        }
         default:
             step = PICK;
             save();

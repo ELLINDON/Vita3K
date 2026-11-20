@@ -70,6 +70,14 @@ public class SetupActivity extends Activity {
         super.onCreate(savedInstanceState);
         if (buildToolsTest())
             return;
+        publishShortcuts();
+        // the launcher's "Add an add-on" shortcut (long press on the icon): the setup screen, which
+        // installs an add-on into the game built here
+        if (ACTION_ADD_ADDON.equals(getIntent() != null ? getIntent().getAction() : null)) {
+            startActivity(new Intent(this, BuildActivity.class).putExtra(BuildActivity.EXTRA_ADD_ADDON, true));
+            finish();
+            return;
+        }
         // not built on this device yet, or built by an older version of the app: the setup first
         if (BuildActivity.needsSetup(this)) {
             startActivity(new Intent(this, BuildActivity.class));
@@ -119,6 +127,29 @@ public class SetupActivity extends Activity {
 
     private void answered() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_DRIVER_ANSWERED, true).apply();
+    }
+
+    static final String ACTION_ADD_ADDON = "io.github.vitarecomps.frontend.ADD_ADDON";
+
+    // "Add an add-on" on the launcher's long-press menu: the only way back to the setup screen once the
+    // game is built, since the icon starts the game straight away
+    private void publishShortcuts() {
+        try {
+            android.content.pm.ShortcutManager shortcuts = getSystemService(android.content.pm.ShortcutManager.class);
+            if (shortcuts == null)
+                return;
+            Intent intent = new Intent(this, SetupActivity.class).setAction(ACTION_ADD_ADDON)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+            android.content.pm.ShortcutInfo addon = new android.content.pm.ShortcutInfo.Builder(this, "add_addon")
+                .setShortLabel("Add an add-on")
+                .setLongLabel("Add an add-on (DLC)")
+                .setIcon(android.graphics.drawable.Icon.createWithResource("android", android.R.drawable.ic_input_add))
+                .setIntent(intent)
+                .build();
+            shortcuts.setDynamicShortcuts(java.util.Collections.singletonList(addon));
+        } catch (Exception e) {
+            Log.w(TAG, "shortcuts", e);
+        }
     }
 
     // The GPU's name from an off-screen OpenGL ES context ("Adreno (TM) 740"): its model number, or 0

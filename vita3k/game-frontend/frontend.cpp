@@ -246,7 +246,8 @@ your own dump of the game, then the game starts. Everything stays in the game's 
                               update), then play
   --dump <zip|vpk|folder|pkg> [--license <work.bin|rif> | --zrif <zRIF>]
                               build the game from this dump without the importer's window (repeat
-                              for its update and add-ons), then play
+                              for its update and add-ons; also --dump=<path>), then play. With the
+                              game built, add-ons alone are installed, without building again
   --build-only                build the game if it isn't (or with --install, --dump), then quit
                               instead of playing (exit code 0: built)
   --add-to-steam              Linux and the Steam Deck: add the game to Steam (Steam must be
@@ -291,8 +292,18 @@ int run(Profile &profile, int argc, char *argv[]) {
         return 0;
 #endif
     Context ctx;
-    for (int i = 1; i < argc; i++)
-        ctx.args.emplace_back(argv[i]);
+    for (int i = 1; i < argc; i++) {
+        // --dump=<path> (and --license=, --zrif=): one argument, as launchers pass an optional file
+        // (RecompLauncher leaves out a whole argument whose file wasn't chosen)
+        const std::string arg = argv[i];
+        const auto eq = arg.find('=');
+        const std::string key = eq == std::string::npos ? std::string() : arg.substr(0, eq);
+        if (key == "--dump" || key == "--license" || key == "--zrif") {
+            ctx.args.push_back(key);
+            ctx.args.push_back(arg.substr(eq + 1));
+        } else
+            ctx.args.push_back(arg);
+    }
     const std::string exe = profile.id + ".exe";
 
     std::vector<std::string> install_firmware;

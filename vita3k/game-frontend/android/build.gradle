@@ -7,6 +7,9 @@
 //   appName        the name under the icon
 //   versionName, versionCode
 //   jniLibsDir     a folder holding arm64-v8a/lib<game>.so
+//   buildToolsDir  the tools that build the game's modules on the device (ss-delta D27), as
+//                  vita-recomp-kit's android-build-tools.py lays them out (jniLibs/, assets/); without
+//                  it the APK can only run modules built elsewhere (a PC's setup)
 // The release build is signed with the key in the environment when there is one (the release
 // workflow: ANDROID_KEYSTORE, a keystore file, and ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
 // ANDROID_KEY_PASSWORD), else with the debug key. Players' installs can only be updated by an APK
@@ -68,12 +71,18 @@ android {
 		targetCompatibility JavaVersion.VERSION_17
 	}
 
+	def buildTools = prop('buildToolsDir', '')
 	sourceSets {
 		main {
 			java.srcDirs = ['src/main/java', "${fork}/external/sdl/android-project/app/src/main/java"]
-			jniLibs.srcDirs = [prop('jniLibsDir', 'jniLibs')]
-			assets.srcDirs = [layout.buildDirectory.dir('game-assets')]
+			jniLibs.srcDirs = [prop('jniLibsDir', 'jniLibs')] + (buildTools ? ["${buildTools}/jniLibs"] : [])
+			assets.srcDirs = [layout.buildDirectory.dir('game-assets')] + (buildTools ? ["${buildTools}/assets"] : [])
 		}
+	}
+
+	androidResources {
+		// buildtools.zip is compressed already
+		noCompress += ['zip']
 	}
 
 	packaging {

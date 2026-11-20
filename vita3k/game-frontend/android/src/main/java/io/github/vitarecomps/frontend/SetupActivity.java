@@ -34,6 +34,7 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -67,6 +68,8 @@ public class SetupActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (buildToolsTest())
+            return;
         if (!shouldOffer()) {
             startGame();
             return;
@@ -212,6 +215,87 @@ public class SetupActivity extends Activity {
             part.delete();
             return e.getMessage() != null ? e.getMessage() : e.toString();
         }
+    }
+
+    // A tiny module built and loaded as the setup builds and the game loads them: imports, zig's version, a
+    // shared library from zig's clang (it starts zig again as a child) into the app's storage
+    private static final String SELFTEST_PY = String.join("\n",
+        "import os, subprocess, sys, time",
+        "import capstone, yaml",
+        "toolchain, kit, out = sys.argv[1:4]",
+        "print('python', sys.version.split()[0], sys.platform, 'executable', sys.executable)",
+        "md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB)",
+        "print('capstone', capstone.__version__, [i.mnemonic for i in md.disasm(bytes([0x70, 0x47]), 0)], 'yaml', yaml.__version__)",
+        "zig = os.path.join(toolchain, 'zig', 'zig')",
+        "env = dict(os.environ, ZIG_GLOBAL_CACHE_DIR=os.path.join(toolchain, 'cache'), ZIG_LOCAL_CACHE_DIR=os.path.join(toolchain, 'cache'))",
+        "print('zig', subprocess.run([zig, 'version'], capture_output=True, text=True, env=env).stdout.strip())",
+        "src = os.path.join(os.path.dirname(out), 'selftest.c')",
+        "open(src, 'w').write('int selftest_answer(void) { return 42; }\\n')",
+        "t = time.time()",
+        "r = subprocess.run([zig, 'cc', '-target', 'aarch64-linux-musl', '-shared', '-nostdlib', '-o', out, src], capture_output=True, text=True, env=env)",
+        "print('zig cc', r.returncode, f'{time.time() - t:.1f} s', r.stderr.strip()[-500:])",
+        "sys.exit(r.returncode)", "");
+
+    // Test tools only, in debuggable builds (ss-delta 14g):
+    //   adb shell am start -n <package>/io.github.vitarecomps.frontend.SetupActivity --es buildtools selftest
+    //   ... --es buildtools python --es args "<arguments; {kit} and {toolchain} name those folders>"
+    // runs the build tools and logs to buildtools-test.log in the app's external folder
+    private boolean buildToolsTest() {
+        Intent intent = getIntent();
+        String mode = intent != null ? intent.getStringExtra("buildtools") : null;
+        if (mode == null || (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0)
+            return false;
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        android.widget.TextView view = new android.widget.TextView(this);
+        view.setText("build tools test: " + mode);
+        setContentView(view);
+        String args = intent.getStringExtra("args");
+        File base = getExternalFilesDir(null);
+        File logFile = new File(base != null ? base : getFilesDir(), "buildtools-test.log");
+        new Thread(() -> {
+            long start = System.currentTimeMillis();
+            try (java.io.PrintWriter log = new java.io.PrintWriter(new java.io.FileWriter(logFile, true), true)) {
+                java.util.function.Consumer<String> say = line -> {
+                    String stamped = String.format(java.util.Locale.ROOT, "%7.1f %s", (System.currentTimeMillis() - start) / 1000.0, line);
+                    log.println(stamped);
+                    Log.i(TAG, stamped);
+                };
+                say.accept("== " + mode + (args != null ? " " + args : ""));
+                try {
+                    BuildTools.unpack(this, say);
+                    say.accept("unpacked or current");
+                    String kit = BuildTools.kit(this).getPath();
+                    String toolchain = BuildTools.toolchain(this).getPath();
+                    int code;
+                    if (mode.equals("selftest")) {
+                        File script = new File(getCacheDir(), "selftest.py");
+                        File so = new File(getCacheDir(), "libselftest.so");
+                        try (FileOutputStream out = new FileOutputStream(script)) {
+                            out.write(SELFTEST_PY.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        }
+                        code = BuildTools.run(BuildTools.python(this, java.util.Arrays.asList(script.getPath(), toolchain, kit, so.getPath())), say);
+                        if (code == 0) {
+                            System.load(so.getPath());
+                            say.accept("loaded " + so + " into the app");
+                        }
+                    } else {
+                        java.util.List<String> list = new java.util.ArrayList<>();
+                        for (String a : (args != null ? args : "").trim().split("\\s+"))
+                            if (!a.isEmpty())
+                                list.add(a.replace("{kit}", kit).replace("{toolchain}", toolchain));
+                        code = BuildTools.run(BuildTools.python(this, list), say);
+                    }
+                    say.accept("exit " + code);
+                } catch (Throwable e) {
+                    say.accept("failed: " + e);
+                    Log.e(TAG, "build tools test", e);
+                }
+            } catch (IOException e) {
+                Log.e(TAG, "build tools test log", e);
+            }
+            main.post(this::finish);
+        }).start();
+        return true;
     }
 
     private void startGame() {

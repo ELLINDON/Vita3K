@@ -31,6 +31,10 @@
 
 namespace game_frontend {
 
+#ifdef __ANDROID__
+std::vector<std::string> android_driver_names(); // android.cpp
+#endif
+
 namespace {
 
 std::string trim(const std::string &s) {
@@ -139,8 +143,13 @@ std::string default_ini(const IniLayout &layout) {
     std::string out = comment_lines(layout.header);
     for (const auto &section : layout.sections) {
         out += "\n[" + section.name + "]\n" + comment_lines(section.help);
-        for (const auto &spec : section.settings)
+        for (const auto &spec : section.settings) {
+#ifdef __ANDROID__
+            if (spec.desktop_only)
+                continue;
+#endif
             out += comment_lines(spec.help) + (spec.commented ? ";" : "") + spec.key + " = " + spec.value + "\n";
+        }
         out += section.body;
     }
     return out;
@@ -449,6 +458,7 @@ SettingSpec scale() {
 SettingSpec window_scale() {
     SettingSpec s{ "window_scale", Kind::Int, "1", 1, 4, {}, "Window size as a multiple of 960x544 (1-4)." };
     s.live = true;
+    s.desktop_only = true;
     return s;
 }
 
@@ -458,6 +468,7 @@ SettingSpec fullscreen(const std::string &id, const std::string &exe) {
                     "{}/screenshots/ next to {}.",
             id, exe) };
     s.live = true;
+    s.desktop_only = true;
     return s;
 }
 
@@ -469,8 +480,13 @@ SettingSpec vsync() {
 }
 
 SettingSpec filter() {
+#ifdef __ANDROID__
+    const char *const target = "the screen";
+#else
+    const char *const target = "the window";
+#endif
     SettingSpec s{ "filter", Kind::Choice, "Bilinear", 0, 0, { "Bilinear", "Nearest", "Bicubic", "FXAA", "FSR" },
-        "How the picture is scaled to the window: Bilinear, Nearest, Bicubic, FXAA, FSR." };
+        fmt::format("How the picture is scaled to {}: Bilinear, Nearest, Bicubic, FXAA, FSR.", target) };
     s.live = true;
     return s;
 }
@@ -478,7 +494,7 @@ SettingSpec filter() {
 SettingSpec mipmaps(bool on_by_default) {
     SettingSpec s{ "mipmaps", Kind::Bool, on_by_default ? "true" : "false", 0, 0, {},
         "Smooth textures that shimmer in motion (the ground, walls): build mip levels for the repeating\n"
-        "textures the game ships without them (false: as on the Vita). Read when the game starts." };
+        "textures the game ships without them (Off: as on the Vita). Read when the game starts." };
     s.title = "Smooth textures (mipmaps)";
     return s;
 }
@@ -490,19 +506,21 @@ IniSection audio() {
 }
 
 IniSection recompiled(const std::string &id) {
-    return { "recompiled", "",
+    IniSection s{ "recompiled", "",
         {
-            { "enabled", Kind::Bool, "true", 0, 0, {}, "Run the recompiled modules natively (false: everything on the JIT, for comparison)." },
+            { "enabled", Kind::Bool, "true", 0, 0, {}, "Run the recompiled modules natively (Off: everything on the JIT, for comparison)." },
             { "jit", Kind::Bool, "false", 0, 0, {},
                 fmt::format("Keep the JIT (dynarmic) for any guest code that has no native code. Off: the game runs on\n"
                             "native code alone, and stops with \"no native code\" in {}/vita3k.log if it ever needs\n"
                             "code that was not recompiled; turn this on then.",
                     id) },
         } };
+    s.settings[1].title = "Keep the JIT";
+    return s;
 }
 
 IniSection debug(const std::string &id) {
-    return { "debug", "",
+    IniSection s{ "debug", "",
         {
             { "log_level", Kind::Choice, "info", 0, 0, { "trace", "debug", "info", "warn", "error", "critical", "off" },
                 fmt::format("Log detail in {}/vita3k.log: trace, debug, info, warn, error, critical, off.", id) },
@@ -512,7 +530,7 @@ IniSection debug(const std::string &id) {
                 "exact: every scene waits for the GPU. targeted: only scenes the CPU reads back wait.\n"
                 "latent: none waits, the CPU reads a frame-old copy. off: no copy (effects may break)." },
             { "high_accuracy", Kind::Bool, "true", 0, 0, {},
-                "Vita3K's high-accuracy rendering (steady smoke). false is faster but can flicker." },
+                "Vita3K's high-accuracy rendering (steady smoke). Off is faster but can flicker." },
 #ifdef __ANDROID__
             { "gpu_driver", Kind::Text, "auto", 0, 0, {},
                 "The Vulkan driver: auto (the driver package installed last from drivers/, such as the Turnip\n"
@@ -520,6 +538,26 @@ IniSection debug(const std::string &id) {
                 "package (<name> for drivers/<name>.adpkg.zip). One that fails to load falls back to the system's." },
 #endif
         } };
+    for (auto &spec : s.settings) {
+        // the validation layer comes with a PC's Vulkan SDK
+        if (spec.key == "validation_layer")
+            spec.desktop_only = true;
+#ifdef __ANDROID__
+        // the settings menu offers the packages on the device (a Text setting can only be changed in the
+        // settings file, which a player can't reach on Android)
+        if (spec.key == "gpu_driver") {
+            spec.title = "GPU driver";
+            spec.kind = Kind::Choice;
+            spec.choices = { "auto", "system" };
+            spec.choice_labels = { "Auto (newest package)", "Device's own" };
+            for (const auto &name : android_driver_names()) {
+                spec.choices.push_back(name);
+                spec.choice_labels.push_back(name);
+            }
+        }
+#endif
+    }
+    return s;
 }
 
 IniSection keyboard(const std::string &extra_help) {

@@ -79,10 +79,14 @@ const char *region_name(const std::string &title_id) {
 // menu lists them as "address - name" (Vita3K's order; a long name is cut, not the address);
 // without any, it stays a number.
 SettingSpec adapter_setting() {
-    SettingSpec s{ "adapter", Kind::Int, "0", 0, 63, {},
-        "The network adapter LAN play uses (network = lan): the one in the same network as the other\n"
-        "PCs. 0 is the first of this PC's adapters with an address.",
-        true };
+#ifdef __ANDROID__
+    const char *const help = "The network adapter Ad Hoc Play uses: the one in the same network as the other players\n"
+                             "(usually the Wi-Fi). 0 is the first of this device's adapters with an address.";
+#else
+    const char *const help = "The network adapter LAN play uses (network = lan): the one in the same network as the other\n"
+                             "PCs. 0 is the first of this PC's adapters with an address.";
+#endif
+    SettingSpec s{ "adapter", Kind::Int, "0", 0, 63, {}, help, true };
     s.title = "Network adapter";
     const auto addrs = net_utils::get_all_assigned_addrs();
     if (!addrs.empty()) {
@@ -123,7 +127,7 @@ game_frontend::IniLayout ini_layout() {
     IniSection display{ "display", "",
         {
             { "full_3d", Kind::Bool, "true", 0, 0, {},
-                "Draw the 3D at 960x544 like the menus and HUD (the game's own ResoDown 0). false: 720x408,\n"
+                "Draw the 3D at 960x544 like the menus and HUD (the game's own ResoDown 0). Off: 720x408,\n"
                 "upscaled, as on the Vita." },
             layout::scale(),
             layout::window_scale(),
@@ -175,6 +179,10 @@ game_frontend::IniLayout ini_layout() {
                 "0: every gamepad drives the window in focus. 1-4: only that gamepad, also while the window is in\n"
                 "the background (two players at one PC, a gamepad each; set it in ss-delta-player<N>.ini)." },
         } };
+    // Android runs one copy of the game, so its Ad Hoc Play is always lan (network's default there)
+    for (auto &spec : multiplayer.settings)
+        if (spec.key == "network" || spec.key == "gamepad")
+            spec.desktop_only = true;
     IniSection boot_config{ "boot_config",
         "Engine settings passed to the game's boot_config.ini (Key = value, case as in that file), for\n"
         "experiments; they win over the settings above. The installed file is not changed." };

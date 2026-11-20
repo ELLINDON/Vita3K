@@ -39,8 +39,10 @@
 #include <jni.h>
 
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 SDL_Window *s_window = nullptr;
@@ -123,6 +125,31 @@ void android_install_driver_packages(const fs::path &game_dir) {
         std::ofstream(fs_utils::path_to_utf8(marker)) << stamp;
         LOG_INFO("Driver package {} unpacked: [debug] gpu_driver = {} uses it", zip_path.filename(), name);
     }
+}
+
+// The driver packages on the device, by the name [debug] gpu_driver takes: those unpacked into
+// files/driver/ and those still waiting as zips in the game's drivers/ (unpacked at the next start)
+std::vector<std::string> android_driver_names() {
+    std::set<std::string> names;
+    boost::system::error_code ec;
+    const fs::path driver_root = fs::path(SDL_GetAndroidInternalStoragePath()) / "driver";
+    if (fs::is_directory(driver_root, ec))
+        for (const auto &entry : fs::directory_iterator(driver_root, ec))
+            if (fs::exists(entry.path() / ".package", ec))
+                names.insert(entry.path().filename().string());
+    if (const char *external = SDL_GetAndroidExternalStoragePath()) {
+        const fs::path drivers = fs::path(external) / "drivers";
+        if (fs::is_directory(drivers, ec))
+            for (const auto &entry : fs::directory_iterator(drivers, ec)) {
+                if (entry.path().extension() != ".zip")
+                    continue;
+                std::string name = entry.path().stem().string();
+                if (name.ends_with(".adpkg"))
+                    name.resize(name.size() - 6);
+                names.insert(name);
+            }
+    }
+    return { names.begin(), names.end() };
 }
 
 // [debug] gpu_driver as Vita3K's custom driver name: auto is the package installed last from drivers/

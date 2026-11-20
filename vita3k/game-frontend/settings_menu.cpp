@@ -135,6 +135,10 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
             continue;
         Page page{ page_title(section.name), {} };
         for (const auto &spec : section.settings) {
+#ifdef __ANDROID__
+            if (spec.desktop_only)
+                continue;
+#endif
             Row row;
             row.section = section.name;
             row.spec = spec;
@@ -304,14 +308,32 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
     result.add(text("Settings", PANEL_X + 24, PANEL_Y + 12, 300, 30, 22, TEXT, overlay_element::left, true).get_compiled());
     result.add(text(m_game_name, PANEL_X + 324, PANEL_Y + 18, PANEL_W - 348, 24, 14, TEXT_DIM, overlay_element::right).get_compiled());
 
-    // the pages, L1/R1
+    // the pages, L1/R1: each tab as wide as its name (bold, as the current one is drawn) plus an even
+    // share of the room left; a smaller font when seven or more names don't fit at 15
     if (!m_pages.empty()) {
-        const uint16_t tab_w = static_cast<uint16_t>((PANEL_W - 48) / m_pages.size());
+        constexpr uint16_t TABS_W = PANEL_W - 48, MIN_GAP = 10;
+        std::vector<uint16_t> widths(m_pages.size());
+        uint16_t size = 15;
+        uint32_t sum = 0;
+        for (;; size--) {
+            sum = 0;
+            for (size_t i = 0; i < m_pages.size(); i++) {
+                uint16_t w = 0, h = 0;
+                text(m_pages[i].title, 0, 0, TABS_W, 26, size, TEXT, overlay_element::left, true).measure_text(w, h, true);
+                widths[i] = w;
+                sum += w;
+            }
+            if (sum + MIN_GAP * m_pages.size() <= TABS_W || size <= 11)
+                break;
+        }
+        const uint16_t gap = static_cast<uint16_t>(sum < TABS_W ? (TABS_W - sum) / m_pages.size() : 0);
+        int16_t x = PANEL_X + 24;
         for (size_t i = 0; i < m_pages.size(); i++) {
-            const int16_t x = static_cast<int16_t>(PANEL_X + 24 + tab_w * i);
+            const uint16_t tab_w = static_cast<uint16_t>(widths[i] + gap);
             if (i == m_page)
                 result.add(rect(x + 4, TABS_Y + 28, tab_w - 8, 3, ACCENT, 1).get_compiled());
-            result.add(text(m_pages[i].title, x, TABS_Y, tab_w, 26, 15, i == m_page ? TEXT : TEXT_DIM, overlay_element::center, i == m_page).get_compiled());
+            result.add(text(m_pages[i].title, x, TABS_Y, tab_w, 26, size, i == m_page ? TEXT : TEXT_DIM, overlay_element::center, i == m_page).get_compiled());
+            x = static_cast<int16_t>(x + tab_w);
         }
     }
 
@@ -380,9 +402,13 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
     if (any_restart)
         result.add(text("* takes effect the next time the game starts", PANEL_X + 30, note_y, PANEL_W - 60, 18, 13, ACCENT).get_compiled());
 
-    result.add(text("Up/Down: choose    Left/Right, Cross: change    L1/R1 (Q/E): page    Circle (C), Esc, F1: close",
-                   PANEL_X + 24, FOOTER_Y, PANEL_W - 48, 20, 12, TEXT_DIM, overlay_element::center)
-            .get_compiled());
+    // the controls: a gamepad's, and on a PC the keyboard's too
+#ifdef __ANDROID__
+    const char *const hints = "Up/Down: choose    Left/Right, Cross: change    L1/R1: page    Circle: close";
+#else
+    const char *const hints = "Up/Down: choose    Left/Right, Cross: change    L1/R1 (Q/E): page    Circle (C), Esc, F1: close";
+#endif
+    result.add(text(hints, PANEL_X + 24, FOOTER_Y, PANEL_W - 48, 20, 12, TEXT_DIM, overlay_element::center).get_compiled());
     return result;
 }
 

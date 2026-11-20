@@ -110,6 +110,91 @@ static bool is_nonpdrm(EmuEnvState &emuenv, const fs::path &output_path) {
     return false;
 }
 
+// A NoNpDrm dump laid out as on a Vita's ux0: keeps an add-on's or a game's licence outside the content,
+// in license/addcont/<title>/<dir>/*.rif or license/app/<title>/*.rif, where pkg2zip dumps have
+// sce_sys/package/work.bin. Both paths below are relative to the dump's root: where the content sits
+// (addcont/<title>/<dir>/ or app/<title>/) and where its licence would be; empty for other content.
+// Called after set_content_path, which cuts an add-on's content ID down to its folder name.
+struct DumpLicenseDirs {
+    std::string content;
+    std::string license;
+};
+
+static DumpLicenseDirs dump_license_dirs(const EmuEnvState &emuenv) {
+    const auto &info = emuenv.app_info;
+    if (info.app_category == "ac")
+        return { fmt::format("addcont/{}/{}/", info.app_title_id, info.app_content_id),
+            fmt::format("license/addcont/{}/{}/", info.app_title_id, info.app_content_id) };
+    if (info.app_category.starts_with("gd"))
+        return { fmt::format("app/{}/", info.app_title_id), fmt::format("license/app/{}/", info.app_title_id) };
+    return {};
+}
+
+// Without a work.bin in the installed content: the licence a zip keeps beside it, written as its work.bin.
+static void take_zip_dump_license(EmuEnvState &emuenv, const ZipPtr &zip, const std::string &content_path, const fs::path &output_path) {
+    const auto dirs = dump_license_dirs(emuenv);
+    const auto work_bin = output_path / "sce_sys/package/work.bin";
+    if (dirs.license.empty() || fs::exists(work_bin) || !content_path.ends_with(dirs.content))
+        return;
+    const auto prefix = content_path.substr(0, content_path.size() - dirs.content.size()) + dirs.license;
+    const mz_uint num_files = mz_zip_reader_get_num_files(zip.get());
+    for (mz_uint i = 0; i < num_files; i++) {
+        mz_zip_archive_file_stat file_stat;
+        if (!mz_zip_reader_file_stat(zip.get(), i, &file_stat) || mz_zip_reader_is_file_a_directory(zip.get(), i))
+            continue;
+        const std::string name = file_stat.m_filename;
+        if (!name.starts_with(prefix) || !string_utils::tolower(name).ends_with(".rif"))
+            continue;
+        fs::create_directories(work_bin.parent_path());
+        if (mz_zip_reader_extract_to_file(zip.get(), i, fs_utils::path_to_utf8(work_bin).c_str(), 0)) {
+            LOG_INFO("Licence: {}", name);
+            return;
+        }
+    }
+}
+
+// The same for a dumped folder: the licence next to the content's own folders, copied in as its work.bin.
+static void take_folder_dump_license(EmuEnvState &emuenv, const fs::path &content_path, const fs::path &dst_path) {
+    const auto dirs = dump_license_dirs(emuenv);
+    const auto work_bin = dst_path / "sce_sys/package/work.bin";
+    if (dirs.license.empty() || fs::exists(work_bin))
+        return;
+    // the dump's root: up one folder per part of dirs.content (addcont/<title>/<dir>/ or app/<title>/)
+    fs::path root = content_path;
+    for (const char c : dirs.content)
+        if (c == '/')
+            root = root.parent_path();
+    boost::system::error_code ec;
+    if (!fs::equivalent(root / fs_utils::utf8_to_path(dirs.content), content_path, ec) || ec)
+        return;
+    const auto license_dir = root / fs_utils::utf8_to_path(dirs.license);
+    if (!fs::is_directory(license_dir, ec))
+        return;
+    for (const auto &entry : fs::directory_iterator(license_dir, ec)) {
+        if (!fs::is_regular_file(entry.path(), ec) || string_utils::tolower(entry.path().extension().string()) != ".rif")
+            continue;
+        fs::create_directories(work_bin.parent_path(), ec);
+        fs::copy_file(entry.path(), work_bin, fs::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            LOG_INFO("Licence: {}", entry.path());
+            return;
+        }
+    }
+}
+
+// Content that kept its PFS index (sce_pfs) was installed as dumped, not decrypted: its files are most
+// likely still encrypted, which the game can't read.
+static void warn_if_still_encrypted(const EmuEnvState &emuenv, const fs::path &installed_path) {
+    if (!fs::exists(installed_path / "sce_pfs/files.db"))
+        return;
+    const auto dirs = dump_license_dirs(emuenv);
+    LOG_WARN("{} [{}] was installed as it is, and its files look encrypted (sce_pfs is still there): no licence "
+             "was found (sce_sys/package/work.bin{}). The game can't read encrypted files: install it again with "
+             "its licence (a pkg: --license or --zrif)",
+        emuenv.app_info.app_title, emuenv.app_info.app_title_id,
+        dirs.license.empty() ? "" : fmt::format(", or {}*.rif beside {}", dirs.license, dirs.content));
+}
+
 static bool set_content_path(EmuEnvState &emuenv, const bool is_theme, fs::path &dest_path) {
     if (emuenv.app_info.app_title_id.empty()) {
         LOG_ERROR("param.sfo has no title ID, not installing it");
@@ -221,7 +306,8 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
             continue;
         }
         const std::string m_filename = file_stat.m_filename;
-        if (m_filename.contains(content_path)) {
+        // starts_with: a ux0-style dump's license/addcont/<title>/<dir>/ holds this content's path too
+        if (m_filename.starts_with(content_path)) {
             file_progress = static_cast<float>(i) / num_files * 100.0f;
             update_progress();
 
@@ -237,6 +323,7 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
         }
     }
 
+    take_zip_dump_license(emuenv, zip, content_path, output_path);
     if (fs::exists(output_path / "sce_sys/package/") && emuenv.app_info.app_title_id.starts_with("PCS")) {
         update_progress();
         if (is_nonpdrm(emuenv, output_path))
@@ -244,6 +331,7 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
         else
             return false;
     }
+    warn_if_still_encrypted(emuenv, output_path);
     if (!copy_path(output_path, emuenv.vita_fs_path, emuenv.app_info.app_title_id, emuenv.app_info.app_category))
         return false;
 
@@ -384,8 +472,10 @@ static bool install_content(EmuEnvState &emuenv, const fs::path &content_path) {
         return false;
     }
 
+    take_folder_dump_license(emuenv, content_path, dst_path);
     if (fs::exists(dst_path / "sce_sys/package/") && !is_nonpdrm(emuenv, dst_path))
         return false;
+    warn_if_still_encrypted(emuenv, dst_path);
 
     if (!copy_path(dst_path, emuenv.vita_fs_path, emuenv.app_info.app_title_id, emuenv.app_info.app_category))
         return false;

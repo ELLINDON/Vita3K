@@ -129,7 +129,10 @@ static bool set_content_path(EmuEnvState &emuenv, const bool is_theme, fs::path 
         }
     } else if (emuenv.app_info.app_category.contains("gp")) {
         if (!fs::exists(app_path) || fs::is_empty(app_path)) {
-            LOG_ERROR("Install app before patch");
+            LOG_ERROR("Install app before patch: this is only the update (patch) {} {}, and the game itself isn't "
+                      "installed. Install the game first (NoNpDrm dumps keep it in app/{} and the update in patch/{}; "
+                      "the update unpacked over the game's folder doesn't work)",
+                emuenv.app_info.app_title_id, emuenv.app_info.app_version, emuenv.app_info.app_title_id, emuenv.app_info.app_title_id);
             return false;
         }
         dest_path /= fs::path("patch") / emuenv.app_info.app_title_id;

@@ -70,6 +70,12 @@ public class SetupActivity extends Activity {
         super.onCreate(savedInstanceState);
         if (buildToolsTest())
             return;
+        // not built on this device yet, or built by an older version of the app: the setup first
+        if (BuildActivity.needsSetup(this)) {
+            startActivity(new Intent(this, BuildActivity.class));
+            finish();
+            return;
+        }
         if (!shouldOffer()) {
             startGame();
             return;

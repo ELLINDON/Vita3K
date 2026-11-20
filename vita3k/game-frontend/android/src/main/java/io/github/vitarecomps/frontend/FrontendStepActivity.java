@@ -38,6 +38,53 @@ public class FrontendStepActivity extends GameActivity {
     private static final String TAG = "FrontendStep";
     public static final String EXTRA_EXIT_CODE = "exit_code";
 
+    // the files the player picked stay open while the step runs
+    private final java.util.List<android.os.ParcelFileDescriptor> picked = new java.util.ArrayList<>();
+
+    /**
+     * The step's arguments, with each content:// URI (a file the player picked through Android's file
+     * picker) as a path the native code can open: a link in the cache, named with the document's
+     * extension (the front end tells a .pkg from a .zip by it), to /proc/self/fd/N of the open file. A
+     * 3 GB dump is read in place, never copied.
+     */
+    @Override
+    protected String[] getArguments() {
+        String[] args = super.getArguments();
+        for (int i = 0; i < args.length; i++) {
+            if (!args[i].startsWith("content://"))
+                continue;
+            android.net.Uri uri = android.net.Uri.parse(args[i]);
+            try {
+                android.os.ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(uri, "r");
+                if (fd == null)
+                    continue;
+                picked.add(fd);
+                String name = displayName(uri);
+                int dot = name.lastIndexOf('.');
+                String extension = dot >= 0 ? name.substring(dot).toLowerCase(java.util.Locale.ROOT) : "";
+                java.io.File link = new java.io.File(getCacheDir(), "picked-" + i + extension);
+                link.delete();
+                android.system.Os.symlink("/proc/self/fd/" + fd.getFd(), link.getPath());
+                Log.i(TAG, "picked " + name + " as " + link);
+                args[i] = link.getPath();
+            } catch (Exception e) {
+                Log.e(TAG, "can't open " + uri, e);
+            }
+        }
+        return args;
+    }
+
+    private String displayName(android.net.Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst() && c.getString(0) != null)
+                return c.getString(0);
+        } catch (Exception e) {
+            Log.w(TAG, "no name for " + uri, e);
+        }
+        String path = uri.getLastPathSegment();
+        return path != null ? path : "";
+    }
+
     @Override
     protected void main() {
         String library = getMainSharedObject();

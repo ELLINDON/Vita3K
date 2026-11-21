@@ -83,6 +83,10 @@ namespace game_frontend {
 void android_window_created(SDL_Window *window); // android.cpp
 void android_install_driver_packages(const fs::path &game_dir); // android.cpp
 std::string android_gpu_driver(const std::string &setting); // android.cpp
+void android_set_emuenv(EmuEnvState *emuenv); // android.cpp
+void android_configure_screen_controls(bool enabled, int size, int opacity, const std::vector<std::pair<float, float>> &spots,
+    uint32_t latch_button, const std::string &latch_label);
+void android_settings_menu_open(bool open);
 #endif
 
 namespace {
@@ -437,6 +441,14 @@ int run(Profile &profile, int argc, char *argv[]) {
     root_paths.set_log_path(ctx.data_dir);
     root_paths.set_shared_path(ctx.data_dir);
 
+#ifdef __ANDROID__
+    // the on-screen controls' settings, for every game: after [audio] (its settings menu page follows Audio)
+    {
+        auto &sections = profile.ini.sections;
+        const auto audio = std::find_if(sections.begin(), sections.end(), [](const IniSection &s) { return s.name == "audio"; });
+        sections.insert(audio == sections.end() ? sections.end() : audio + 1, layout::on_screen_controls());
+    }
+#endif
     const auto read_settings = [&] {
         Settings s = load_settings(ctx.exe_dir, profile.id, profile.ini, profile.default_touches, ctx.player, overrides);
         if (!vita_fs_override.empty())
@@ -616,6 +628,13 @@ int run(Profile &profile, int argc, char *argv[]) {
 
     EmuEnvState emuenv;
     ctx.emuenv = &emuenv;
+#ifdef __ANDROID__
+    // the on-screen controls reach the game's state from the time its window exists (on_window) until
+    // run() leaves, before emuenv goes
+    struct ScreenControlsLink {
+        ~ScreenControlsLink() { android_set_emuenv(nullptr); }
+    } screen_controls_link;
+#endif
     if (!app::init(emuenv, cfg, root_paths)) {
         fail(fmt::format("The emulated environment could not be initialised. See {}/vita3k.log.", profile.id));
         return 1;
@@ -741,6 +760,20 @@ int run(Profile &profile, int argc, char *argv[]) {
     std::shared_ptr<SettingsMenu> menu;
     bool select_held = false, select_used = false;
     std::chrono::steady_clock::time_point select_down{};
+#ifdef __ANDROID__
+    // the on-screen controls (android.cpp, OnScreenControls.java): [controls], the game's touch spots
+    // they leave clear, the [touch] bindings' points (not those a game moves each frame: touch_targets),
+    // and the game's latch button
+    const auto configure_screen_controls = [&] {
+        std::vector<std::pair<float, float>> spots;
+        for (const auto &touch : settings.touches)
+            if (!profile.touch_targets.contains(touch.name))
+                spots.emplace_back(touch.x, touch.y);
+        android_configure_screen_controls(settings.values.get_bool("controls.on_screen"),
+            settings.values.get_int("controls.on_screen_size"), settings.values.get_int("controls.on_screen_opacity"), spots,
+            profile.screen_latch.button, profile.screen_latch.label);
+    };
+#endif
     const auto apply_change = [&](const SettingsMenu::Change &change) {
         std::string error;
         if (!save_setting(settings_file(ctx.exe_dir, profile.id, ctx.player), change.section, change.key, change.value, error))
@@ -760,6 +793,10 @@ int run(Profile &profile, int argc, char *argv[]) {
             emuenv.renderer->set_screen_filter(change.value);
         else if (key == "audio.volume")
             emuenv.audio.set_global_volume(std::clamp(std::atoi(change.value.c_str()), 0, 100) / 100.f);
+#ifdef __ANDROID__
+        else if (change.section == "controls")
+            configure_screen_controls();
+#endif
     };
     const auto open_menu = [&] {
         if (menu || !session_ptr || !emuenv.overlay_manager || !emuenv.renderer)
@@ -768,6 +805,9 @@ int run(Profile &profile, int argc, char *argv[]) {
         emuenv.renderer->hide_pause_overlay = true;
         session_ptr->set_pause_reason(app::AppSessionPauseReason::Menu, true);
         emuenv.overlay_manager->attach_thread_input("settings_menu", menu);
+#ifdef __ANDROID__
+        android_settings_menu_open(true);
+#endif
         LOG_INFO("Settings menu: open");
     };
     const auto close_menu = [&] {
@@ -781,6 +821,9 @@ int run(Profile &profile, int argc, char *argv[]) {
         menu.reset();
         session_ptr->set_pause_reason(app::AppSessionPauseReason::Menu, false);
         emuenv.renderer->hide_pause_overlay = false;
+#ifdef __ANDROID__
+        android_settings_menu_open(false);
+#endif
         LOG_INFO("Settings menu: closed");
     };
 
@@ -794,6 +837,9 @@ int run(Profile &profile, int argc, char *argv[]) {
 #ifdef __ANDROID__
         // the soft keyboard for the game's text dialogs, the log flush on pause (android.cpp)
         android_window_created(window);
+        // the on-screen controls, now that there is a game for them to drive
+        android_set_emuenv(&emuenv);
+        configure_screen_controls();
 #endif
         // the game's own icon, from the player's installed copy. Not on macOS: there a window has no
         // icon, and SDL would replace the Dock icon, the app bundle's (shaped as a macOS icon), with

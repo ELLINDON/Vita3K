@@ -845,6 +845,8 @@ int main(int argc, char *argv[]) {
     profile.id = "ss-delta";
     profile.ini = ini_layout();
     profile.default_touches = { { "black_rite", 56, 494, "F", "lefttrigger" } };
+    // the lock-on is L held: on a phone's on-screen controls, a toggle holds it (the owner, 2026-11-21)
+    profile.screen_latch = { SCE_CTRL_L1, "LOCK" };
     profile.multiplayer = true;
     profile.icon_resource = true;
     profile.usage = "Saves (then quit):\n"

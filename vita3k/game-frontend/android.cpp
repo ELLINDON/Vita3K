@@ -20,10 +20,17 @@
 //   * the surface: the renderer draws only while the Java SurfaceView has one. The Java class
 //     io.github.vitarecomps.frontend.GameSurface (game-frontend/android/java) reports it; every
 //     game's APK compiles that class, so the JNI name below is the same for all of them;
-//   * the soft keyboard the game's text dialogs ask for (ime/keyboard.h): SDL's text input.
+//   * the soft keyboard the game's text dialogs ask for (ime/keyboard.h): SDL's text input;
+//   * the on-screen controls (io.github.vitarecomps.frontend.OnScreenControls): what they hold goes
+//     into the controller state the game reads (CtrlState::screen_state), their menu button opens the
+//     settings menu, and the frontend tells them [controls], the game's touch spots and when the
+//     settings menu is open.
 
 #ifdef __ANDROID__
 
+#include <ctrl/ctrl.h>
+#include <ctrl/state.h>
+#include <emuenv/state.h>
 #include <ime/keyboard.h>
 #include <renderer/vulkan/screen_renderer.h>
 #include <util/android_driver.h>
@@ -39,6 +46,7 @@
 #include <jni.h>
 
 #include <fstream>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -46,6 +54,11 @@
 
 namespace {
 SDL_Window *s_window = nullptr;
+
+// the running game's state, for the on-screen controls' calls from Java's UI thread (null before the
+// game's window exists and once the frontend leaves)
+std::mutex s_emuenv_mutex;
+EmuEnvState *s_emuenv = nullptr;
 
 // Android may kill a paused app without another word (swiped away from the recent apps): the log
 // is written on a thread of its own, so its last lines are flushed when the app leaves the screen.
@@ -188,11 +201,100 @@ void android_window_created(SDL_Window *window) {
     }
 }
 
+// the game's state for the on-screen controls (null: the game is gone)
+void android_set_emuenv(EmuEnvState *emuenv) {
+    const std::lock_guard<std::mutex> lock(s_emuenv_mutex);
+    s_emuenv = emuenv;
+}
+
+// Calls a method of GameActivity, `call(env, activity, method)`, from the game's thread. The setup's
+// activities run this library too, without GameActivity's methods: nothing happens there.
+template <typename Call>
+void call_game_activity(const char *name, const char *signature, Call &&call) {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity()); // a local reference
+    if (!env || !activity)
+        return;
+    jclass cls = env->GetObjectClass(activity);
+    if (jmethodID method = env->GetMethodID(cls, name, signature))
+        call(env, activity, method);
+    if (env->ExceptionCheck())
+        env->ExceptionClear(); // NoSuchMethodError outside GameActivity
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+}
+
+// The on-screen controls' settings ([controls]), the game's touch spots (960x544 points) they leave
+// clear and its latch button (Profile::screen_latch: the Vita button, its label; none when empty):
+// GameActivity.configureOnScreenControls, which shows or hides them on the UI thread
+void android_configure_screen_controls(bool enabled, int size, int opacity, const std::vector<std::pair<float, float>> &spots,
+    uint32_t latch_button, const std::string &latch_label) {
+    call_game_activity("configureOnScreenControls", "(ZII[FILjava/lang/String;)V", [&](JNIEnv *env, jobject activity, jmethodID method) {
+        std::vector<jfloat> flat;
+        for (const auto &[x, y] : spots) {
+            flat.push_back(x);
+            flat.push_back(y);
+        }
+        jfloatArray points = env->NewFloatArray(static_cast<jsize>(flat.size()));
+        if (!points)
+            return;
+        env->SetFloatArrayRegion(points, 0, static_cast<jsize>(flat.size()), flat.data());
+        jstring label = env->NewStringUTF(latch_label.c_str());
+        env->CallVoidMethod(activity, method, static_cast<jboolean>(enabled), static_cast<jint>(size), static_cast<jint>(opacity), points,
+            static_cast<jint>(latch_button), label);
+        if (label)
+            env->DeleteLocalRef(label);
+        env->DeleteLocalRef(points);
+    });
+}
+
+// The settings menu opened or closed: the on-screen controls show while it is open even when they are
+// off, so that a phone without a gamepad can always change them back
+void android_settings_menu_open(bool open) {
+    call_game_activity("onSettingsMenu", "(Z)V", [&](JNIEnv *env, jobject activity, jmethodID method) {
+        env->CallVoidMethod(activity, method, static_cast<jboolean>(open));
+    });
+}
+
 } // namespace game_frontend
 
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_vitarecomps_frontend_GameSurface_setSurfaceStatus(JNIEnv *, jobject, jboolean surface_present) {
     renderer::vulkan::set_android_surface(surface_present);
+}
+
+// The on-screen controls' buttons (SceCtrlButtons as the extended functions read them: L1, R1) and
+// sticks (-1 to 1, down and right positive), whenever they change
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_vitarecomps_frontend_OnScreenControls_setState(JNIEnv *, jclass, jint buttons, jfloat lx, jfloat ly, jfloat rx, jfloat ry) {
+    const std::lock_guard<std::mutex> lock(s_emuenv_mutex);
+    if (!s_emuenv)
+        return;
+    const uint32_t ext = static_cast<uint32_t>(buttons);
+    // the basic functions' L and R are the extended ones' L1 and R1
+    uint32_t basic = ext & ~static_cast<uint32_t>(SCE_CTRL_L1 | SCE_CTRL_R1);
+    if (ext & SCE_CTRL_L1)
+        basic |= SCE_CTRL_L;
+    if (ext & SCE_CTRL_R1)
+        basic |= SCE_CTRL_R;
+    const std::lock_guard<std::mutex> ctrl_lock(s_emuenv->ctrl.mutex);
+    auto &state = s_emuenv->ctrl.screen_state;
+    state.buttons = basic;
+    state.buttons_ext = ext;
+    state.axes[0] = lx;
+    state.axes[1] = ly;
+    state.axes[2] = rx;
+    state.axes[3] = ry;
+}
+
+// the on-screen menu button: the settings menu opens, or closes (as F1 or a held Select)
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_vitarecomps_frontend_OnScreenControls_toggleMenu(JNIEnv *, jclass) {
+    const std::lock_guard<std::mutex> lock(s_emuenv_mutex);
+    if (!s_emuenv)
+        return;
+    const std::lock_guard<std::mutex> ctrl_lock(s_emuenv->ctrl.mutex);
+    s_emuenv->ctrl.injected_menu_toggle = true;
 }
 
 namespace ime {

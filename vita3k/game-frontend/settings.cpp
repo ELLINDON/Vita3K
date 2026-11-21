@@ -608,6 +608,24 @@ IniSection touch(const std::string &body) {
     return s;
 }
 
+IniSection on_screen_controls() {
+    IniSection s{ "controls", "",
+        {
+            { "on_screen", Kind::Bool, "true", 0, 0, {},
+                "Buttons and sticks on the touchscreen; a finger anywhere else touches the game itself. They hide\n"
+                "while a gamepad is used and come back when it is disconnected. Off: only the menu button at the\n"
+                "top stays, and they show while the settings menu is open." },
+            { "on_screen_size", Kind::Int, "100", 50, 150, {}, "Their size, in percent (50-150)." },
+            { "on_screen_opacity", Kind::Int, "60", 10, 100, {}, "How opaque they are, in percent (10-100)." },
+        } };
+    s.settings[0].title = "On-screen controls";
+    s.settings[1].title = "Size";
+    s.settings[2].title = "Opacity";
+    for (auto &spec : s.settings)
+        spec.live = true;
+    return s;
+}
+
 } // namespace layout
 
 } // namespace game_frontend

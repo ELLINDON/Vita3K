@@ -56,7 +56,7 @@ constexpr color4f CLEAR{ 0.f, 0.f, 0.f, 0.f };
 std::string page_title(const std::string &section) {
     static const std::map<std::string, std::string> titles = {
         { "paths", "Paths" }, { "display", "Display" }, { "audio", "Audio" }, { "recompiled", "Native code" },
-        { "debug", "Debug" }, { "game", "Game" }, { "multiplayer", "Multiplayer" },
+        { "debug", "Debug" }, { "game", "Game" }, { "multiplayer", "Multiplayer" }, { "controls", "Controls" },
     };
     const auto it = titles.find(section);
     if (it != titles.end())
@@ -121,6 +121,8 @@ std::string shown_value(const SettingsMenu::Row &row) {
         return row.value == "true" ? "On" : "Off";
     if (row.spec.key == "scale" || row.spec.key == "window_scale")
         return row.value + "x";
+    if (row.spec.key == "on_screen_size" || row.spec.key == "on_screen_opacity")
+        return row.value + "%";
     return row.value;
 }
 

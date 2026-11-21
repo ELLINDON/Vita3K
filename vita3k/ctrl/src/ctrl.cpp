@@ -330,11 +330,13 @@ static void start_input_pipe(CtrlState &state) {
     });
 }
 
+// the test driver's input (injected_state) and the on-screen controls' (screen_state)
 static void apply_injected(uint32_t *buttons, float axes[4], bool ext, const CtrlState &state) {
-    const auto &injected = state.injected_state;
-    *buttons |= ext ? injected.buttons_ext : injected.buttons;
-    for (int i = 0; i < 4; i++)
-        axes[i] += injected.axes[i];
+    for (const VirtualKeyboardState *source : { &state.injected_state, &state.screen_state }) {
+        *buttons |= ext ? source->buttons_ext : source->buttons;
+        for (int i = 0; i < 4; i++)
+            axes[i] += source->axes[i];
+    }
 }
 
 static void apply_keyboard(uint32_t *buttons, float axes[4], bool ext, EmuEnvState &emuenv) {

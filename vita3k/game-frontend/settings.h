@@ -172,6 +172,9 @@ IniSection keyboard(const std::string &extra_help = {});
 IniSection gamepad();
 // the [touch] section, with a game's default bindings as lines of `body`
 IniSection touch(const std::string &body);
+// [controls]: the on-screen controls on a phone's touchscreen (Android; the frontend adds the section
+// to every game's layout there, after [audio])
+IniSection on_screen_controls();
 } // namespace layout
 
 } // namespace game_frontend

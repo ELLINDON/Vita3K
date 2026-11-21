@@ -26,6 +26,7 @@
 
 #include <util/fs.h>
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -88,6 +89,13 @@ struct Profile {
     std::vector<TouchBinding> default_touches;
     // [touch] bindings whose point the game decides (a HUD element that moves), by binding name
     std::map<std::string, Touches::Target> touch_targets;
+    // Android's on-screen controls: a small button that holds a Vita button (SceCtrlButtons, as the
+    // extended functions read it: SCE_CTRL_L1) down from one tap to the next, for an action the game
+    // wants held (ss-delta: L, the lock-on). None when `label` is empty.
+    struct ScreenLatch {
+        uint32_t button = 0;
+        std::string label;
+    } screen_latch;
     // Ad Hoc Play: --player 2-4 run more copies with their own Vita user, config and log
     bool multiplayer = false;
     // the executable has an icon resource with id 101 (its .rc); the window then uses it

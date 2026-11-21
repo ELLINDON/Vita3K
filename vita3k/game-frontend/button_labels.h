@@ -56,22 +56,25 @@ enum class ButtonSymbol : uint8_t {
     Select,
 };
 
-// a symbol's box in its texture, in the texture's pixels: the strokes (or the word), which are
-// painted over; in a font page, the glyph's cell
+// a symbol's box in its texture, in the texture's pixels (as drawn: upright in a flip_y texture): the
+// strokes (or the word), which are painted over; in a font page, the glyph's cell. white: the letters
+// in white instead of their Xbox colours (a symbol on a disc of its own colour)
 struct ButtonSlot {
     ButtonSymbol symbol;
     uint16_t x, y, w, h;
+    bool white = false;
 };
 
 // a texture: FNV-1a 64 of its first level as the game holds it (swizzled), its base format
 // (SceGxmTextureBaseFormat: UBC1, UBC3, or U8 for a font page), its size, a name for the log, and its
-// symbols
+// symbols. flip_y: the game keeps the picture upside down (its rows bottom to top)
 struct ButtonAtlas {
     uint64_t hash;
     uint32_t format;
     uint16_t width, height;
     const char *name;
     std::vector<ButtonSlot> slots;
+    bool flip_y = false;
 };
 
 uint64_t fnv1a64(const uint8_t *data, size_t size);

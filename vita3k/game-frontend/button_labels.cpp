@@ -342,6 +342,14 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
         renderer::texture::resolve_z_order_compressed_texture(format, blocks.data(), data, width, height);
         renderer::texture::decompress_compressed_texture(format, src.data(), blocks.data(), width, height);
     }
+    // a picture kept upside down: painted upright, and turned back below
+    const auto flip_rows = [](std::vector<uint8_t> &pixels, uint32_t w, uint32_t h) {
+        for (uint32_t y = 0; y < h / 2; y++)
+            std::swap_ranges(pixels.begin() + static_cast<size_t>(y) * w * 4, pixels.begin() + static_cast<size_t>(y + 1) * w * 4,
+                pixels.begin() + static_cast<size_t>(h - 1 - y) * w * 4);
+    };
+    if (atlas->flip_y)
+        flip_rows(src, width, height);
     const uint32_t s = static_cast<uint32_t>(m_scale);
     const uint32_t w = width * s, h = height * s;
     rgba.assign(static_cast<size_t>(w) * h * 4, 0);
@@ -417,7 +425,10 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
         const float tall = word ? slot.h * 1.5f : (face && aspect >= natural ? std::max(slot.w, slot.h) : slot.h);
         const float xscale = word ? 1.f : std::clamp(aspect / natural, 0.4f, 1.f);
         const Label &l = label->second;
-        draw_text(img, (slot.x + slot.w / 2.f) * s, (slot.y + slot.h / 2.f) * s, tall * s, xscale, STROKE, l.text, l.r, l.g, l.b);
+        if (slot.white)
+            draw_text(img, (slot.x + slot.w / 2.f) * s, (slot.y + slot.h / 2.f) * s, tall * s, xscale, STROKE, l.text, 255, 255, 255);
+        else
+            draw_text(img, (slot.x + slot.w / 2.f) * s, (slot.y + slot.h / 2.f) * s, tall * s, xscale, STROKE, l.text, l.r, l.g, l.b);
         drawn++;
     }
     if (font) {
@@ -427,6 +438,8 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
             rgba[i + 3] = 255;
         }
     }
+    if (atlas->flip_y)
+        flip_rows(rgba, w, h);
     if (m_logged.insert(hash).second)
         LOG_INFO("Button labels: {} redrawn ({} of {} symbols)", atlas->name, drawn, atlas->slots.size());
     out_width = w;

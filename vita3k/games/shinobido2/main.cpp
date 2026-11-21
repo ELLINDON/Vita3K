@@ -18,16 +18,20 @@
 // shinobido2.exe: Shinobido 2: Revenge of Zen (US, PCSE00015) on the shared single-game frontend
 // (game-frontend/profile.h). The utakata project's docs describe the port.
 
+#include "../../game-frontend/button_labels.h"
 #include "../../game-frontend/profile.h"
 #include "saves.h"
 
 #include <config/state.h>
+#include <ctrl/state.h>
 #include <display/state.h>
 #include <emuenv/state.h>
 #include <mem/functions.h>
 #include <mem/ptr.h>
 #include <ngs/state.h>
+#include <renderer/functions.h>
 #include <renderer/state.h>
+#include <renderer/texture_cache.h>
 #include <util/log.h>
 #include <util/system.h>
 
@@ -41,6 +45,7 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -49,6 +54,7 @@
 // provides WinMain for the windowed executable, which calls main below
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_messagebox.h>
+#include <stb_image_write.h>
 
 namespace {
 
@@ -89,7 +95,7 @@ game_frontend::IniSection game_layout() {
         "Skip the company logos at start: the opening movie follows the loading screen at once (Start\n"
         "skips that, as on the Vita)." };
     skip_intro.title = "Skip intro logos";
-    return { "game", "", { language, skip_intro, layout::repatch() } };
+    return { "game", "", { language, skip_intro, game_frontend::button_labels_setting(), layout::repatch() } };
 }
 
 // [cheats]: switched in the settings menu while the game runs (apply_cheats)
@@ -573,6 +579,107 @@ std::optional<std::array<float, 2>> camera_angles(EmuEnvState &emuenv) {
     return std::array<float, 2>{ std::atan2(r[0], -r[2]) * degrees, std::asin(r[9]) * degrees };
 }
 
+// [game] button_labels (utakata docs/01-research.md, "Button prompts"): the textures with PlayStation
+// buttons in them, found as the game uploads them (UTAKATA_TEXTURE_DUMP below), and the symbols' boxes
+// in them, upright: the game keeps its pictures upside down. Hashes and coordinates only.
+std::vector<game_frontend::ButtonAtlas> button_atlases() {
+    using Symbol = game_frontend::ButtonSymbol;
+    return {
+        // the UI font's page of button glyphs (prompts in text: "(X) OK (O) Back"), white symbols in
+        // black discs; the sticks' L and R stay
+        { 0x62b8e15ed100c438ull, 0x87000000u, 128, 512, "font page with the button glyphs",
+            { { Symbol::Circle, 8, 8, 20, 21 }, { Symbol::Cross, 47, 11, 14, 14 }, { Symbol::Square, 9, 45, 18, 18 },
+                { Symbol::Triangle, 44, 43, 20, 17 }, { Symbol::L, 54, 157, 9, 16 }, { Symbol::R, 45, 194, 11, 16 },
+                { Symbol::Start, 16, 228, 40, 12 }, { Symbol::Select, 11, 264, 49, 12 } },
+            true },
+        // the HUD's atlas: a triangle in a ring, and circle, cross and square on discs of their own colour
+        { 0x3a9fd8a58220c667ull, 0x87000000u, 512, 512, "HUD atlas",
+            { { Symbol::Triangle, 225, 55, 31, 27 }, { Symbol::Circle, 350, 189, 30, 31, true },
+                { Symbol::Cross, 406, 194, 22, 22, true }, { Symbol::Square, 456, 191, 28, 27, true } },
+            true },
+        // the pause menu's Basic Controls page, one picture per language: the red symbols on the right
+        // (the cross's box as large as the others', so that its letter is as tall); the drawing of the
+        // Vita stays as it is
+        { 0x8b80ee57d17c6761ull, 0x85000000u, 1024, 1024, "Basic Controls (English)",
+            { { Symbol::Square, 799, 74, 17, 17 }, { Symbol::Triangle, 798, 139, 21, 18 }, { Symbol::Circle, 799, 252, 20, 20 },
+                { Symbol::Cross, 796, 368, 18, 18 } },
+            true },
+        { 0xde580ab9ec7ec20bull, 0x85000000u, 1024, 1024, "Basic Controls (French)",
+            { { Symbol::Square, 878, 74, 16, 17 }, { Symbol::Triangle, 877, 139, 21, 18 }, { Symbol::Circle, 878, 252, 19, 20 },
+                { Symbol::Cross, 879, 368, 18, 18 } },
+            true },
+        { 0xd5b790901de51996ull, 0x85000000u, 1024, 1024, "Basic Controls (Spanish)",
+            { { Symbol::Square, 868, 74, 17, 17 }, { Symbol::Triangle, 868, 139, 20, 18 }, { Symbol::Circle, 868, 252, 20, 20 },
+                { Symbol::Cross, 870, 368, 18, 18 } },
+            true },
+    };
+}
+
+// Development (UTAKATA_TEXTURE_DUMP=<folder>): every texture the game uploads in the formats its UI
+// uses, written once as a PNG named <format>-<width>x<height>-<FNV-1a 64 of its first level, as
+// game_frontend::ButtonLabels hashes it>.png, decoded as swizzled. Nothing is replaced. For finding
+// the textures with PlayStation buttons in them.
+class TextureDump : public renderer::TextureOverride {
+public:
+    explicit TextureDump(fs::path dir)
+        : dir(std::move(dir)) {
+        fs::create_directories(this->dir);
+    }
+    bool wants(SceGxmTextureBaseFormat format, uint32_t width, uint32_t height) const override {
+        return bytes_of(format, width, height) && width >= 8 && height >= 8 && width <= 2048 && height <= 2048;
+    }
+    bool make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t height, const uint8_t *data, uint32_t size,
+        std::vector<uint8_t> &, uint32_t &, uint32_t &) override {
+        const uint32_t bytes = bytes_of(format, width, height);
+        if (!bytes || size < bytes)
+            return false;
+        uint64_t hash = 0xcbf29ce484222325ull;
+        for (uint32_t i = 0; i < bytes; i++)
+            hash = (hash ^ data[i]) * 0x100000001b3ull;
+        {
+            std::lock_guard lock(mutex);
+            if (!done.insert(hash).second)
+                return false;
+        }
+        std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4, 255);
+        switch (format) {
+        case SCE_GXM_TEXTURE_BASE_FORMAT_U8: {
+            std::vector<uint8_t> linear(bytes);
+            renderer::texture::swizzled_texture_to_linear_texture(linear.data(), data, width, height, 8);
+            for (size_t i = 0; i < linear.size(); i++)
+                rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = linear[i];
+            break;
+        }
+        case SCE_GXM_TEXTURE_BASE_FORMAT_U8U8U8U8:
+            renderer::texture::swizzled_texture_to_linear_texture(rgba.data(), data, width, height, 32);
+            break;
+        default: {
+            std::vector<uint8_t> blocks(bytes);
+            renderer::texture::resolve_z_order_compressed_texture(format, blocks.data(), data, width, height);
+            renderer::texture::decompress_compressed_texture(format, rgba.data(), blocks.data(), width, height);
+        }
+        }
+        const fs::path file = dir / fmt::format("{:x}-{}x{}-{:016x}.png", fmt::underlying(format), width, height, hash);
+        stbi_write_png(fs_utils::path_to_utf8(file).c_str(), width, height, 4, rgba.data(), width * 4);
+        return false;
+    }
+
+private:
+    static uint32_t bytes_of(SceGxmTextureBaseFormat format, uint32_t width, uint32_t height) {
+        switch (format) {
+        case SCE_GXM_TEXTURE_BASE_FORMAT_UBC1: return width * height / 2;
+        case SCE_GXM_TEXTURE_BASE_FORMAT_UBC2:
+        case SCE_GXM_TEXTURE_BASE_FORMAT_UBC3: return width * height;
+        case SCE_GXM_TEXTURE_BASE_FORMAT_U8: return width * height;
+        case SCE_GXM_TEXTURE_BASE_FORMAT_U8U8U8U8: return width * height * 4;
+        default: return 0;
+        }
+    }
+    fs::path dir;
+    std::mutex mutex;
+    std::set<uint64_t> done;
+};
+
 // --import-save / --export-save
 struct SaveCommand {
     std::string import_from, export_to;
@@ -658,7 +765,33 @@ int main(int argc, char *argv[]) {
     FrameRate frame_rate;
     IntroSkip intro_skip;
     CheatState cheats;
+    std::unique_ptr<TextureDump> texture_dump;
+    if (const char *dir = std::getenv("UTAKATA_TEXTURE_DUMP"))
+        texture_dump = std::make_unique<TextureDump>(fs_utils::utf8_to_path(dir));
+    // [game] button_labels: the textures with PlayStation buttons redrawn with Xbox labels as they are
+    // uploaded; the settings menu switches it
+    game_frontend::ButtonLabels button_labels(button_atlases());
     profile.hooks.on_tick = [&](game_frontend::Context &ctx) {
+        if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
+            if (texture_dump) {
+                if (cache->texture_override.load() != texture_dump.get()) {
+                    cache->texture_override = texture_dump.get();
+                    cache->refresh_texture_override();
+                }
+            } else {
+                // auto: from the first connected gamepad's own labels (it may change while the game runs)
+                std::string style = ctx.settings->values.get("game.button_labels");
+                std::map<std::string, std::string> face;
+                if (style == "auto")
+                    style = game_frontend::auto_button_style(ctx.emuenv->ctrl, face);
+                const bool changed = button_labels.configure(style, ctx.settings->gamepad, static_cast<int>(std::lround(ctx.settings->scale)), face);
+                if (cache->texture_override.load() != &button_labels) {
+                    cache->texture_override = &button_labels;
+                    cache->refresh_texture_override();
+                } else if (changed)
+                    cache->refresh_texture_override();
+            }
+        }
         apply_cheats(*ctx.emuenv, ctx.settings->values, cheats);
         if (ctx.settings->values.get_int("display.frame_rate") == 60)
             update_frame_rate(*ctx.emuenv, frame_rate);

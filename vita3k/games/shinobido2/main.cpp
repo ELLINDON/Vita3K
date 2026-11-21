@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -109,6 +110,10 @@ game_frontend::IniLayout ini_layout() {
             layout::debug(id),
             layout::keyboard(),
             layout::gamepad(),
+#ifndef __ANDROID__
+            // the mouse camera: the right stick turns the camera in the field (a PC's mouse)
+            layout::mouse(),
+#endif
             layout::touch("; Caution (the eye on the right in a mission, one per nearby enemy): focus on that enemy.\n"
                           "; The finger goes to the topmost eye wherever it is (the point below is not used),\n"
                           "; and only while an eye is shown.\n"
@@ -399,6 +404,26 @@ void skip_intro_logos(EmuEnvState &emuenv, IntroSkip &state) {
     state.writes++;
 }
 
+// The camera's angles, for the mouse camera (utakata docs/01-research.md, "Mouse camera"): its world
+// matrix is at +0xc0 of the application, row 0 the right vector (sin yaw, 0, -cos yaw), row 2 the
+// forward vector, whose y is sin pitch. Both grow with the right stick pushed right and down.
+std::optional<std::array<float, 2>> camera_angles(EmuEnvState &emuenv) {
+    const int64_t app = read_guest(emuenv, 0x8146c2b0, 4);
+    if (app <= 0)
+        return std::nullopt;
+    const Address m = static_cast<Address>(app) + 0xc0;
+    if (!is_valid_addr(emuenv.mem, m) || !is_valid_addr(emuenv.mem, m + 47))
+        return std::nullopt;
+    float r[12];
+    std::memcpy(r, Ptr<uint8_t>(m).get(emuenv.mem), sizeof(r));
+    // a rotation: the right vector level and of unit length
+    const float length = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+    if (!(std::abs(length - 1.0f) < 0.01f) || !(std::abs(r[1]) < 0.01f) || !(std::abs(r[9]) <= 1.0f))
+        return std::nullopt;
+    constexpr float degrees = 180.0f / 3.14159265f;
+    return std::array<float, 2>{ std::atan2(r[0], -r[2]) * degrees, std::asin(r[9]) * degrees };
+}
+
 // --import-save / --export-save
 struct SaveCommand {
     std::string import_from, export_to;
@@ -422,6 +447,14 @@ int main(int argc, char *argv[]) {
     profile.ini = ini_layout();
     profile.default_touches = { { "caution", 896, 260, "F", "righttrigger" } };
     profile.touch_targets["caution"] = caution_eye;
+    // the right stick turns the camera at one speed (utakata docs/01-research.md, "Mouse camera"): past
+    // 77 steps of 127 from the centre, 120 degrees a second left and right and 60 up and down; nothing
+    // closer to the centre
+    profile.stick_response.points = { { 76.0f / 127.0f, 0.0f }, { 77.0f / 127.0f, 120.0f }, { 1.0f, 120.0f } };
+    profile.stick_response_y = game_frontend::StickResponse{ { { 76.0f / 127.0f, 0.0f }, { 77.0f / 127.0f, 60.0f }, { 1.0f, 60.0f } } };
+    // it also speeds up while the stick is held (0.27 degrees a frame more each frame, at 30 fps), so the
+    // mouse camera counts what it really turned
+    profile.camera_angles = camera_angles;
     profile.usage = "Saves (then quit):\n"
                     "  --import-save <folder|zip>  copy decrypted Vita saves (e.g. from a Vita) in, keeping the\n"
                     "                              old ones in shinobido2/save-backups/\n"

@@ -29,6 +29,7 @@
 #include <ngs/state.h>
 #include <renderer/state.h>
 #include <util/log.h>
+#include <util/system.h>
 
 #include <algorithm>
 #include <array>
@@ -37,6 +38,7 @@
 #include <cstring>
 #include <iterator>
 #include <chrono>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -64,6 +66,25 @@ game_frontend::IniSection audio_layout() {
     return section;
 }
 
+// [game] language: the Vita's system language, which the game reads once at boot (0x8114ce00): French
+// and Spanish give its languages 3 and 4, anything else English (1), kept at +0x1e0 of the
+// application object (utakata docs/01-research.md, "Text language"). It has no language option of
+// its own.
+const std::map<std::string, SceSystemParamLang> LANGUAGES{
+    { "english", SCE_SYSTEM_PARAM_LANG_ENGLISH_US },
+    { "french", SCE_SYSTEM_PARAM_LANG_FRENCH },
+    { "spanish", SCE_SYSTEM_PARAM_LANG_SPANISH },
+};
+
+game_frontend::IniSection game_layout() {
+    game_frontend::SettingSpec language{ "language", Kind::Choice, "english", 0, 0, { "english", "french", "spanish" },
+        "The game's language, also in the system dialogs: english, french or spanish. Read when the game\n"
+        "starts." };
+    language.title = "Language";
+    language.choice_labels = { "English", "French", "Spanish" };
+    return { "game", "", { language, layout::repatch() } };
+}
+
 game_frontend::IniLayout ini_layout() {
     const std::string id = "shinobido2", exe = id + game_frontend::executable_suffix;
     return {
@@ -79,6 +100,7 @@ game_frontend::IniLayout ini_layout() {
                     layout::filter(),
                     layout::mipmaps(true) } },
             audio_layout(),
+            game_layout(),
             layout::recompiled(id),
             layout::debug(id),
             layout::keyboard(),
@@ -387,10 +409,12 @@ int main(int argc, char *argv[]) {
                 ("Save: " + message).c_str(), nullptr);
         return ok ? 0 : 1;
     };
-    profile.hooks.configure = [](game_frontend::Context &, Config &cfg) {
+    profile.hooks.configure = [](game_frontend::Context &ctx, Config &cfg) {
         // COLOR0/COLOR1 clamped to [0, 1]: without it the first mission's walls are near black and the
         // scene is tinted blue; with it the colours match the Vita's (as ss-delta's fog)
         cfg.clamp_color_varyings = true;
+        // [game] language: the system language the game asks SceAppUtil for at boot
+        cfg.sys_lang = LANGUAGES.at(ctx.settings->values.get("game.language"));
     };
     profile.hooks.before_run = [](game_frontend::Context &ctx) {
         const bool effects = ctx.settings->values.get_bool("audio.effects");

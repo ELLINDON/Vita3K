@@ -181,13 +181,18 @@ game_frontend::IniLayout ini_layout() {
                 "In quests, offerings don't run out: each is refilled to the uses it started the quest with." },
             { "max_lacrima", Kind::Bool, "false", 0, 0, {}, "Keep Lacrima at 9,999,999." },
             { "max_levels", Kind::Bool, "false", 0, 0, {},
-                "Raise the Life and Magic levels to 99, the highest." },
+                "Raise the Life and Magic levels to 99, the highest. Not yet early in the story (the\n"
+                "journal's first chapters, while Portraiture hides the Right Arm's levels)." },
+            { "one_hit_kills", Kind::Bool, "false", 0, 0, {},
+                "In quests, your attacks defeat ordinary enemies in one hit. Bosses take five: the game\n"
+                "limits a hit on a boss to a fifth of its health." },
         } };
     for (auto &spec : cheats.settings)
         spec.live = true;
     cheats.settings[1].title = "Unlimited offerings";
     cheats.settings[2].title = "Max Lacrima";
     cheats.settings[3].title = "Max levels";
+    cheats.settings[4].title = "One-hit kills";
     // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
     // rarely used for several copies on one machine, and with local its rooms never reached the network
 #ifdef _WIN32
@@ -427,13 +432,14 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
 
     const bool health = values.get_bool("cheats.infinite_health");
     const bool offerings = values.get_bool("cheats.infinite_offerings");
-    if (health || offerings) {
+    const bool one_hit = values.get_bool("cheats.one_hit_kills");
+    if (health || offerings || one_hit) {
         const uint32_t *const quest_holder = u32(QUEST_HOLDER);
         const uint32_t *const quest = quest_holder && *quest_holder ? u32(*quest_holder) : nullptr;
         const uint32_t *const player_ref = quest && *quest == QUEST_VTABLE ? u32(*quest_holder + 0x18) : nullptr;
         const Address player = player_ref ? *player_ref : 0;
         const uint32_t *const vtable = player ? u32(player) : nullptr;
-        if (vtable && *vtable == PLAYER_VTABLE && is_valid_addr_range(mem, player, player + 0x230)) {
+        if (vtable && *vtable == PLAYER_VTABLE && is_valid_addr_range(mem, player, player + 0x400)) {
             uint8_t *const p = Ptr<uint8_t>(player).get(mem);
             if (health) {
                 float hp;
@@ -456,6 +462,18 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
                         std::memcpy(p + 0x200 + 4 * slot, &start, 4);
                         once("unlimited offering uses", player);
                     }
+                }
+            }
+            if (one_hit) {
+                // tomberyx's "One Hit Kill": 1.07e20 at +0x370 (a damage factor, **hypothesis**), which the
+                // game sets back from time to time. Ordinary enemies then fall to one hit; the game still
+                // limits a hit on a boss to a fifth of its health
+                constexpr uint32_t ONE_HIT = 0x60babe00;
+                uint32_t current;
+                std::memcpy(&current, p + 0x370, 4);
+                if (current != ONE_HIT) {
+                    std::memcpy(p + 0x370, &ONE_HIT, 4);
+                    once("one-hit kills", player);
                 }
             }
         }
@@ -485,7 +503,10 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
                     std::memcpy(s + 0x8c, &LACRIMA_MAX, 4);
                     once("max Lacrima", save);
                 }
-                // not before the levels open: the game hasn't shown them yet
+                // Early in the story (the journal's own chapters) these are 0 and the levels in play are in
+                // another record, at a place that depends on the save (+0x139fa8 in one); left alone then
+                if (levels && (!life || !magic) && state.logged.insert(fmt::format("no levels {:#x}", save)).second)
+                    LOG_INFO("cheats: max levels: this save's levels aren't at the known place yet (early in the story); left alone");
                 if (levels && life && magic && (life != LEVEL_MAX || magic != LEVEL_MAX)) {
                     const uint16_t max = LEVEL_MAX;
                     std::memcpy(s + 0x17ced8, &max, 2);

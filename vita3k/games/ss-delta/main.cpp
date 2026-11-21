@@ -165,6 +165,8 @@ game_frontend::IniLayout ini_layout() {
     game.settings.back().title = "Skip intro logos";
     game.settings.push_back(language_setting());
     game.settings.push_back(game_frontend::button_labels_setting());
+    // the Undub patch (Japanese voices, ss-delta docs/01-research.md, "Undub patch") is a rePatch mod
+    game.settings.push_back(game_frontend::layout::repatch());
     // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
     // rarely used for several copies on one machine, and with local its rooms never reached the network
 #ifdef _WIN32
@@ -222,7 +224,9 @@ game_frontend::IniLayout ini_layout() {
 // `values` has the given value everywhere it is set; the installed file stays as it is.
 void override_boot_config(EmuEnvState &emuenv, const std::string &title_id, const fs::path &dir, const std::map<std::string, std::string> &values) {
     const fs::path installed = emuenv.vita_fs_path / "ux0" / "app" / title_id / "resource" / "boot_config.ini";
-    fs::ifstream in(installed, std::ios::binary);
+    // a rePatch mod's copy, when it has one (game_frontend::apply_repatch ran before)
+    const auto modded = emuenv.io.read_overrides.find(read_override_key(installed));
+    fs::ifstream in(modded == emuenv.io.read_overrides.end() ? installed : modded->second, std::ios::binary);
     if (!in) {
         LOG_WARN("boot_config.ini not found at {}; the game's own settings stay", installed);
         return;

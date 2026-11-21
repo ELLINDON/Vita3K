@@ -68,8 +68,8 @@ import java.util.List;
  * version of the app (android-build.json's stamp: the APK's version and its tools). Once the game is
  * built, the launcher's "Add an add-on" shortcut opens it for one more step on its own:
  *
- *   add-on     an add-on (DLC) the player picks installed into the game built here (the front end's
- *              --install-content), with nothing built again
+ *   add-on     an add-on (DLC) or a rePatch mod (a .zip) the player picks installed into the game built
+ *              here (the front end's --install-content), with nothing built again
  */
 public class BuildActivity extends Activity {
     private static final String TAG = "BuildActivity";
@@ -187,8 +187,9 @@ public class BuildActivity extends Activity {
               + "dump isn't needed (add it only to install the game again)."
             : "The game is built on this device from your own copy of it: a dump of the PS Vita game (a NoNpDrm .zip "
               + "or .vpk; zip a dumped folder first), or a .pkg with its licence file (work.bin or .rif). Add the "
-              + "game's last update after it if the dump lacks it (its .pkg), and add-ons (DLC) the same way; an "
-              + "add-on can also be added later, from the app icon's long-press menu. The PS Vita firmware comes from Sony's "
+              + "game's last update after it if the dump lacks it (its .pkg), and add-ons (DLC) the same way, or a "
+              + "rePatch mod (a .zip with its rePatch folder); add-ons and mods can also be added later, from the "
+              + "app icon's long-press menu. The PS Vita firmware comes from Sony's "
               + "servers (190 MB).\n\n"
               + "Building takes about 15 minutes on a fast device and needs about 10 GB of free space (5 GB of it "
               + "only while building). Keep the device charging. Nothing leaves the device.", 15, false);
@@ -231,7 +232,7 @@ public class BuildActivity extends Activity {
             }
             refresh();
         });
-        addonButton = button("Add an add-on…", v -> pick(REQUEST_PICK_ADDON));
+        addonButton = button("Add an add-on or mod…", v -> pick(REQUEST_PICK_ADDON));
         actions.addView(buildButton);
         actions.addView(retryButton);
         actions.addView(playButton);

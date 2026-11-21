@@ -25,6 +25,7 @@
 
 #include "../archive.h"
 #include "input.h"
+#include "repatch.h"
 #include "settings.h"
 #include "settings_menu.h"
 
@@ -246,8 +247,9 @@ your own dump of the game, then the game starts. Everything stays in the game's 
                               update), then play
   --dump <zip|vpk|folder|pkg> [--license <work.bin|rif> | --zrif <zRIF>]
                               build the game from this dump without the importer's window (repeat
-                              for its update and add-ons; also --dump=<path>), then play. With the
-                              game built, add-ons alone are installed, without building again
+                              for its update, add-ons and rePatch mods; also --dump=<path>), then
+                              play. With the game built, add-ons and mods alone are installed,
+                              without building again
   --build-only                build the game if it isn't (or with --install, --dump), then quit
                               instead of playing (exit code 0: built)
   --add-to-steam              Linux and the Steam Deck: add the game to Steam (Steam must be
@@ -280,8 +282,9 @@ your own dump of the game, then the game starts. Everything stays in the game's 
   --write-ini <file>          write the default settings file there, then quit
   --help                      this list
 For the importer and scripts: --install-firmware <PUP>, --install-content <dump> [--license ...|
---zrif ...] (install into the Vita file system, then quit), --dump-elfs <seconds> (run unseen,
-writing every module as loaded to <id>/elfdumps/, then quit).
+--zrif ...] (install into the Vita file system, then quit; a folder or zip with rePatch/<title ID>/
+goes to ux0/rePatch/, read in place of the game's files while [game] repatch is on),
+--dump-elfs <seconds> (run unseen, writing every module as loaded to <id>/elfdumps/, then quit).
 )";
 
 int run(Profile &profile, int argc, char *argv[]) {
@@ -508,6 +511,8 @@ int run(Profile &profile, int argc, char *argv[]) {
         LOG_WARN("Command line: ignored \"{}\"", arg);
 
     // a game released in several regions: the installed one runs (title_id first), or --title-id's
+    std::vector<std::string> title_ids{ profile.title_id };
+    title_ids.insert(title_ids.end(), profile.other_title_ids.begin(), profile.other_title_ids.end());
     if (!profile.other_title_ids.empty()) {
         const auto installed = [&](const std::string &id) { return fs::exists(settings.vita_fs / "ux0" / "app" / id / "eboot.bin"); };
         const auto known = [&](const std::string &id) {
@@ -643,7 +648,11 @@ int run(Profile &profile, int argc, char *argv[]) {
         for (const auto &item : install_content) {
             const fs::path path = fs_utils::utf8_to_path(item.path);
             LOG_INFO("Installing {}", item.path);
-            if (fs::is_directory(path)) {
+            // a rePatch mod (repatch.h): beside the game, not into it
+            if (const auto mod = install_repatch(emuenv.vita_fs_path, path, title_ids)) {
+                LOG_ERROR_IF(!*mod, "{}: the mod could not be installed", item.path);
+                ok = *mod && ok;
+            } else if (fs::is_directory(path)) {
                 ok = install_contents(emuenv, path) > 0 && ok;
             } else if (string_utils::tolower(path.extension().string()) == ".pkg") {
                 std::string zrif = pkg_zrif(path, item.zrif, item.license, emuenv.vita_fs_path);
@@ -704,6 +713,13 @@ int run(Profile &profile, int argc, char *argv[]) {
 #endif
         return 1;
     }
+
+    // [game] repatch (layout::repatch; false in a game without it): mods in ux0/rePatch/<title ID>/,
+    // before the game's hook, which may serve copies of the game's files made from them
+    if (settings.values.get_bool("game.repatch"))
+        apply_repatch(emuenv, profile.title_id);
+    else if (fs::is_directory(emuenv.vita_fs_path / "ux0" / "rePatch" / profile.title_id))
+        LOG_INFO("rePatch: mods off ([game] repatch = false): the game's own files are read");
 
     if (profile.hooks.before_run)
         profile.hooks.before_run(ctx);

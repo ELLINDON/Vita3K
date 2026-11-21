@@ -499,6 +499,16 @@ SettingSpec mipmaps(bool on_by_default) {
     return s;
 }
 
+SettingSpec repatch() {
+    SettingSpec s{ "repatch", Kind::Bool, "true", 0, 0, {},
+        "Mods: read the files in the Vita file system's ux0/rePatch/<title ID>/ in place of the game's own,\n"
+        "as the rePatch plugin does on a Vita (an undub, for instance). Install one with the setup, or\n"
+        "--install-content <its folder or .zip>; the game's own files stay as they are. false: the game as\n"
+        "installed. Read when the game starts." };
+    s.title = "Mods (rePatch)";
+    return s;
+}
+
 IniSection audio() {
     SettingSpec volume{ "volume", Kind::Int, "100", 0, 100, {}, "0-100." };
     volume.live = true;

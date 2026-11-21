@@ -163,6 +163,8 @@ SettingSpec vsync();
 SettingSpec filter();
 // [display] mipmaps: renderer::State::generate_mips, which the front end sets once the renderer exists
 SettingSpec mipmaps(bool on_by_default);
+// [game] repatch: the frontend serves ux0/rePatch/<title ID>/ in place of the game's files (repatch.h)
+SettingSpec repatch();
 IniSection audio();
 IniSection recompiled(const std::string &id);
 IniSection debug(const std::string &id);

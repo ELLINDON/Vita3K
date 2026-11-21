@@ -45,6 +45,7 @@ void overlay::refresh() {
 int32_t user_interface::run_input_loop(overlay_input_handler *input, std::function<bool()> check_state) {
     m_interactive.store(true);
     m_input_loop_thread_id = std::this_thread::get_id();
+    m_input_loop_suspended.store(false);
     m_input_loop_exited.store(false);
 
     constexpr uint64_t ms_threshold = 500;
@@ -149,6 +150,7 @@ int32_t user_interface::run_input_loop(overlay_input_handler *input, std::functi
     }
 
     m_interactive.store(false);
+    m_input_loop_suspended.store(result == selection_code::interrupted);
     m_input_loop_exited.store(true);
     m_input_loop_exited.notify_all();
 

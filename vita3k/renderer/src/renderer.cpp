@@ -99,7 +99,10 @@ void State::update_overlays() {
             }
             if (dlg->poll_dialog(*common_dialog, sys_date_format, sys_button)
                 && common_dialog->type != TROPHY_SETUP_DIALOG) {
-                if (just_created || dlg->input_loop_exited()) {
+                // not while its loop is only suspended under another overlay (a front end's settings
+                // menu): it is still queued, and attaching it again would take the input back from that
+                // overlay on every frame, which froze the menu (ss-delta 09-android)
+                if (just_created || (dlg->input_loop_exited() && !dlg->input_loop_suspended())) {
                     dlg->reset_input_loop();
                     overlay_manager->attach_thread_input("common_dialog", dlg);
                 }

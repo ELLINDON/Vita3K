@@ -71,6 +71,9 @@ protected:
 
     std::thread::id m_input_loop_thread_id;
     std::atomic<bool> m_input_loop_exited{ true };
+    // the loop gave way to an overlay opened over this one (selection_code::interrupted): the display
+    // manager keeps it queued and runs it again once that one closes
+    std::atomic<bool> m_input_loop_suspended{ false };
 
     std::function<void(int32_t status)> on_close = nullptr;
 
@@ -84,6 +87,7 @@ public:
     void detach_input() { m_input_thread_detached.store(true); }
 
     bool input_loop_exited() const { return m_input_loop_exited.load(); }
+    bool input_loop_suspended() const { return m_input_loop_suspended.load(); }
     void reset_input_loop() {
         m_stop_input_loop.store(false);
         m_stop_pad_interception.store(false);

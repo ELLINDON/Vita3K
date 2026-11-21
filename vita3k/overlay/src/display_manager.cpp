@@ -295,12 +295,16 @@ void display_manager::input_thread_loop() {
         if (!interrupted_items.empty()) {
             std::lock_guard lock(m_input_stack_guard);
 
-            // Rebuild stack: interrupted items first (in insertion order), then new items.
+            // Rebuild stack: the new items first, newest first (the overlay that just opened takes the
+            // input, as in RPCS3), then the interrupted ones in their order, which resume once it closes.
+            // With the interrupted items first, an overlay opened over a waiting one (a front end's
+            // settings menu over a save dialog) never got the input: the dialog's loop ran again at once
+            // and, the game being paused for the menu, read nothing (ss-delta 09-android).
             std::deque<input_thread_context_t> rebuilt;
-            for (auto &item : interrupted_items) {
-                rebuilt.push_back(std::move(item));
+            for (auto it = m_input_token_stack.rbegin(); it != m_input_token_stack.rend(); ++it) {
+                rebuilt.push_back(std::move(*it));
             }
-            for (auto &item : m_input_token_stack) {
+            for (auto &item : interrupted_items) {
                 rebuilt.push_back(std::move(item));
             }
             m_input_token_stack = std::move(rebuilt);

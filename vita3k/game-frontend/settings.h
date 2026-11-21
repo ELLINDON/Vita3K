@@ -170,6 +170,9 @@ IniSection recompiled(const std::string &id);
 IniSection debug(const std::string &id);
 IniSection keyboard(const std::string &extra_help = {});
 IniSection gamepad();
+// [mouse]: the mouse camera (input.h MouseCamera), for a game whose right stick turns the camera; the
+// frontend captures the cursor only in a game whose layout has it
+IniSection mouse();
 // the [touch] section, with a game's default bindings as lines of `body`
 IniSection touch(const std::string &body);
 // [controls]: the on-screen controls on a phone's touchscreen (Android; the frontend adds the section

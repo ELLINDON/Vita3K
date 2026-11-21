@@ -597,6 +597,30 @@ IniSection gamepad() {
     return s;
 }
 
+IniSection mouse() {
+    IniSection s{ "mouse",
+        "The mouse camera. Middle-click or press capture_key to capture the cursor: it hides, and moving\n"
+        "the mouse turns the camera (the right stick). The same again or Esc releases it, and the mouse\n"
+        "is the touchscreen again (left button front, right button rear). The settings menu, a text\n"
+        "dialog and switching to another window release it until they are done.",
+        {
+            { "camera", Kind::Bool, "true", 0, 0, {}, "Off: the mouse is only the touchscreen, the cursor is never captured." },
+            { "capture_key", Kind::Text, "Tab", 0, 0, {}, "Key(s) that capture and release the cursor, up to two, as in [keyboard]." },
+            { "sensitivity", Kind::Float, "1", 0.2, 4, {},
+                "How far the camera turns for a mouse motion (0.2-4). 1: a full turn for 7200 counts (23 cm at\n"
+                "800 dpi). The camera turns at most as fast as with the stick fully pushed, so a flick faster\n"
+                "than that turns less than it asks." },
+            { "invert_y", Kind::Bool, "false", 0, 0, {}, "Moving the mouse up turns the camera down." },
+        } };
+    s.settings[0].title = "Mouse camera";
+    s.settings[3].title = "Invert vertical";
+    for (auto &spec : s.settings) {
+        spec.live = true;
+        spec.desktop_only = true;
+    }
+    return s;
+}
+
 IniSection touch(const std::string &body) {
     IniSection s{ "touch",
         "Keys and gamepad buttons that hold a finger on the touchscreen for as long as they are held.\n"

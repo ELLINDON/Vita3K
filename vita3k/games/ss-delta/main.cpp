@@ -244,6 +244,10 @@ game_frontend::IniLayout ini_layout() {
             layout::debug(id),
             layout::keyboard(),
             layout::gamepad(),
+#ifndef __ANDROID__
+            // the mouse camera: the right stick turns the camera in the field (a PC's mouse)
+            layout::mouse(),
+#endif
             layout::touch("; Black Rite: touch and hold the Black Rite icon, lower left during a quest.\n"
                           "black_rite = 56, 494\nblack_rite_key = F\nblack_rite_gamepad = lefttrigger\n"),
             boot_config,
@@ -847,6 +851,14 @@ int main(int argc, char *argv[]) {
     profile.default_touches = { { "black_rite", 56, 494, "F", "lefttrigger" } };
     // the lock-on is L held: on a phone's on-screen controls, a toggle holds it (the owner, 2026-11-21)
     profile.screen_latch = { SCE_CTRL_L1, "LOCK" };
+    // how fast the right stick turns the camera (degrees a second, by push along one axis), measured with
+    // the compass during a quest (ss-delta docs/01-research.md, "Mouse camera"): nothing up to 0.4, then
+    // growing about tenfold for each 0.25 more, up to some 550 from 0.95
+    profile.stick_response.points = {
+        { 0.400f, 0.0f }, { 0.449f, 0.6f }, { 0.504f, 2.0f }, { 0.551f, 4.75f }, { 0.598f, 9.3f },
+        { 0.701f, 27.8f }, { 0.756f, 47.0f }, { 0.803f, 73.0f }, { 0.850f, 119.0f }, { 0.874f, 156.0f },
+        { 0.898f, 210.0f }, { 0.929f, 355.0f }, { 0.953f, 510.0f }, { 1.000f, 550.0f },
+    };
     profile.multiplayer = true;
     profile.icon_resource = true;
     profile.usage = "Saves (then quit):\n"

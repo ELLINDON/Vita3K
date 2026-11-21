@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <mutex>
 
 namespace game_frontend {
@@ -181,9 +182,24 @@ void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keybo
     }
 }
 
+PhysicalKeyCode key_from_scancode(int scancode) {
+    return static_cast<PhysicalKeyCode>(0x070000 | (scancode & 0xffff));
+}
+
+std::vector<PhysicalKeyCode> parse_keys(const std::string &list, const std::string &setting, std::vector<std::string> &warnings) {
+    std::vector<PhysicalKeyCode> codes;
+    for (const auto &key : split_list(list)) {
+        const auto code = parse_key(key);
+        if (code == PhysicalKeyCode::Unbound)
+            warnings.push_back(setting + ": unknown key \"" + key + "\"");
+        else if (codes.size() < 2)
+            codes.push_back(code);
+    }
+    return codes;
+}
+
 void Keyboard::key(EmuEnvState &emuenv, int scancode, bool is_pressed) {
-    // SDL scancodes are USB HID keyboard usages, as are the physical key codes
-    const auto code = static_cast<PhysicalKeyCode>(0x070000 | (scancode & 0xffff));
+    const auto code = key_from_scancode(scancode);
     if (input::physical_key_code_name(code).empty())
         return;
     if (is_pressed)
@@ -239,6 +255,104 @@ void Keyboard::update(EmuEnvState &emuenv) {
     kb.axes[1] = axis(cfg.keyboard_leftstick_up, cfg.keyboard_leftstick_up_alt, cfg.keyboard_leftstick_down, cfg.keyboard_leftstick_down_alt);
     kb.axes[2] = axis(cfg.keyboard_rightstick_left, cfg.keyboard_rightstick_left_alt, cfg.keyboard_rightstick_right, cfg.keyboard_rightstick_right_alt);
     kb.axes[3] = axis(cfg.keyboard_rightstick_up, cfg.keyboard_rightstick_up_alt, cfg.keyboard_rightstick_down, cfg.keyboard_rightstick_down_alt);
+}
+
+float StickResponse::speed(float push) const {
+    if (push <= points.front().first)
+        return 0;
+    for (size_t i = 1; i < points.size(); i++) {
+        const auto &[p0, s0] = points[i - 1];
+        const auto &[p1, s1] = points[i];
+        if (push > p1)
+            continue;
+        if (p1 <= p0)
+            return s1;
+        const float t = (push - p0) / (p1 - p0);
+        // a camera speed grows steeply with the push: exponentially between points (linearly from 0)
+        return s0 > 0 && s1 > s0 ? s0 * std::pow(s1 / s0, t) : s0 + (s1 - s0) * t;
+    }
+    return points.back().second;
+}
+
+float StickResponse::push_for(float speed) const {
+    if (speed <= 0)
+        return 0;
+    for (size_t i = 1; i < points.size(); i++) {
+        const auto &[p0, s0] = points[i - 1];
+        const auto &[p1, s1] = points[i];
+        if (speed > s1)
+            continue;
+        if (s1 <= s0)
+            return p0;
+        const float t = s0 > 0 ? std::log(speed / s0) / std::log(s1 / s0) : (speed - s0) / (s1 - s0);
+        return p0 + (p1 - p0) * t;
+    }
+    return points.back().first;
+}
+
+void MouseCamera::configure(const StickResponse &response, const Options &options) {
+    this->response = response;
+    this->options = options;
+}
+
+void MouseCamera::motion(float dx, float dy) {
+    const float degrees = degrees_per_count * options.sensitivity;
+    axes[0].pending += dx * degrees;
+    axes[1].pending += dy * degrees * (options.invert_y ? -1.0f : 1.0f);
+}
+
+float MouseCamera::stick_for(Axis &axis, float dt) const {
+    // what the stick turned since the last tick is no longer asked for; a turn past what was asked
+    // ends the motion rather than turning back
+    if (axis.pending != 0) {
+        const float left = axis.pending - axis.speed * dt;
+        axis.pending = left * axis.pending > 0 ? left : 0;
+    }
+    const float limit = response.max_speed() * max_backlog;
+    axis.pending = std::clamp(axis.pending, -limit, limit);
+    const auto stop = [&] {
+        axis.pending = 0;
+        axis.speed = 0;
+        return 0.0f;
+    };
+    if (std::abs(axis.pending) < 0.01f)
+        return stop();
+    // the speed that turns the rest within catch_up, and the push that gives it
+    const float push = response.push_for(std::abs(axis.pending) / catch_up);
+    // The game reads the stick as a byte, 128 at the centre: the push reaches it as 128 +- steps. The
+    // controller (ctrl.cpp, float_to_byte) truncates (v + 1) * 127.5, so +v came out a step short of
+    // -v, and ss-delta, whose camera speed grows steeply with the push, turned the mouse's right turns
+    // 15% slower than its left ones; the value returned lands on 128 +- steps exactly.
+    float steps = std::round(push * 127.0f);
+    if (response.speed(steps / 127.0f) <= 0)
+        steps = std::ceil(push * 127.0f); // not back into the dead zone
+    const float speed = response.speed(steps / 127.0f);
+    if (speed <= 0)
+        return stop();
+    const float sign = axis.pending > 0 ? 1.0f : -1.0f;
+    axis.speed = sign * speed;
+    return (1.0f + sign * steps) / 127.5f;
+}
+
+void MouseCamera::update(EmuEnvState &emuenv, uint64_t now_ns) {
+    const float dt = last_ns && now_ns > last_ns ? std::min(static_cast<float>(now_ns - last_ns) / 1e9f, 0.1f) : 0.0f;
+    last_ns = now_ns;
+    if (!pushed && axes[0].pending == 0 && axes[1].pending == 0)
+        return;
+    const float x = stick_for(axes[0], dt);
+    const float y = stick_for(axes[1], dt);
+    const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
+    auto &state = emuenv.ctrl.mouse_state;
+    state.axes[2] = x;
+    state.axes[3] = y;
+    pushed = x != 0 || y != 0;
+}
+
+void MouseCamera::clear(EmuEnvState &emuenv) {
+    axes[0] = axes[1] = {};
+    pushed = false;
+    const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
+    emuenv.ctrl.mouse_state = {};
 }
 
 void Touches::configure(const std::vector<TouchBinding> &touches, std::vector<std::string> &warnings,

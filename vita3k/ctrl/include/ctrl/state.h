@@ -83,6 +83,10 @@ struct CtrlState {
     VirtualKeyboardState injected_state;
     // buttons and sticks held on a frontend's on-screen controls (a phone's touchscreen), added to the others
     VirtualKeyboardState screen_state;
+    // the right stick a frontend makes from the mouse while it captures the cursor (mouse camera), added to the others
+    VirtualKeyboardState mouse_state;
+    // relative mouse motion the test driver sent (in mouse counts), which the frontend takes as if the captured mouse moved
+    float injected_mouse_dx = 0, injected_mouse_dy = 0;
     // PNG paths the test driver asked to save the current frame to (the frontend takes them)
     std::vector<std::string> injected_screenshots;
     // (path, guest address, size) dumps of guest memory the test driver asked for (the frontend writes them)
@@ -115,6 +119,7 @@ struct CtrlState {
         std::fill_n(last_vcount, 5, 0);
         keyboard_state = {};
         screen_state = {};
+        mouse_state = {};
         overlay_input_intercepted.store(false, std::memory_order_relaxed);
         overlay_mouse.x.store(0.f, std::memory_order_relaxed);
         overlay_mouse.y.store(0.f, std::memory_order_relaxed);

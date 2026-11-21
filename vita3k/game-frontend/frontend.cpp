@@ -753,6 +753,29 @@ int run(Profile &profile, int argc, char *argv[]) {
         for (const auto &line : touch_warnings)
             LOG_WARN("{}.ini: {}", profile.id, line);
     }
+    // [mouse] (layout::mouse, in a game whose layout has it): middle click or its capture key captures
+    // the cursor, and the mouse turns the camera (MouseCamera) until the same again or Esc releases it;
+    // the settings menu, a text dialog or another window release it while they last
+    const bool has_mouse_camera = settings.values.values.contains("mouse.camera");
+    MouseCamera mouse_camera;
+    std::vector<input::PhysicalKeyCode> capture_keys;
+    bool capture_wanted = false; // the player captured the cursor
+    bool captured = false; // SDL's relative mouse mode is on
+    const auto configure_mouse = [&](bool report) {
+        if (!has_mouse_camera)
+            return;
+        mouse_camera.configure(profile.stick_response,
+            { static_cast<float>(settings.values.get_float("mouse.sensitivity")), settings.values.get_bool("mouse.invert_y") });
+        std::vector<std::string> warnings;
+        capture_keys = parse_keys(settings.values.get("mouse.capture_key"), "mouse.capture_key", warnings);
+        if (report)
+            for (const auto &line : warnings)
+                LOG_WARN("{}.ini: {}", profile.id, line);
+        if (!settings.values.get_bool("mouse.camera"))
+            capture_wanted = false;
+    };
+    configure_mouse(true);
+    const auto mouse_camera_on = [&] { return has_mouse_camera && settings.values.get_bool("mouse.camera"); };
     // The settings menu (settings_menu.h): F1, or Select held for a second on a gamepad, opens it
     // over the paused game; F1, Esc or Circle closes it, and its Exit page quits the game. Its changes
     // are written to the settings file here, on the main thread, and the live ones applied.
@@ -793,6 +816,8 @@ int run(Profile &profile, int argc, char *argv[]) {
             emuenv.renderer->set_screen_filter(change.value);
         else if (key == "audio.volume")
             emuenv.audio.set_global_volume(std::clamp(std::atoi(change.value.c_str()), 0, 100) / 100.f);
+        else if (change.section == "mouse")
+            configure_mouse(false);
 #ifdef __ANDROID__
         else if (change.section == "controls")
             configure_screen_controls();
@@ -881,6 +906,14 @@ int run(Profile &profile, int argc, char *argv[]) {
         case SDL_EVENT_KEY_DOWN:
             if (event.key.repeat)
                 break;
+            if (mouse_camera_on() && !menu
+                && std::find(capture_keys.begin(), capture_keys.end(), key_from_scancode(event.key.scancode)) != capture_keys.end()) {
+                // the capture key captures or releases the cursor, and is no Vita button then
+                capture_wanted = !capture_wanted;
+                break;
+            }
+            if (event.key.key == SDLK_ESCAPE && captured)
+                capture_wanted = false; // and Esc goes on to the game, if it is bound (it closes an open menu only)
             if (event.key.key == SDLK_F1) {
                 if (menu)
                     close_menu();
@@ -906,12 +939,20 @@ int run(Profile &profile, int argc, char *argv[]) {
             keyboard.key(emuenv, event.key.scancode, false);
             break;
         case SDL_EVENT_MOUSE_MOTION:
-            set_mouse(event.motion.x, event.motion.y);
+            if (captured)
+                mouse_camera.motion(event.motion.xrel, event.motion.yrel);
+            else
+                set_mouse(event.motion.x, event.motion.y);
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
-            set_mouse(event.button.x, event.button.y);
             const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            if (event.button.button == SDL_BUTTON_MIDDLE && down && mouse_camera_on() && !menu)
+                capture_wanted = !capture_wanted;
+            // the captured cursor touches nothing: it is hidden, and stays where it was captured
+            if (captured)
+                break;
+            set_mouse(event.button.x, event.button.y);
             if (event.button.button == SDL_BUTTON_LEFT)
                 touch.mouse_button_left = down;
             else if (event.button.button == SDL_BUTTON_RIGHT)
@@ -1042,10 +1083,37 @@ int run(Profile &profile, int argc, char *argv[]) {
             save_frame(emuenv, fs_utils::utf8_to_path(path));
         for (const auto &[count, dir] : records)
             record_frames(emuenv, fs_utils::utf8_to_path(dir), count);
+        const bool ime = is_any_ime_active(emuenv);
+        // the mouse camera: the cursor is captured while the player wants it and the game has the window
+        // to itself (no settings menu, no text dialog)
+        if (window && has_mouse_camera) {
+            const bool focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+            const bool capture = mouse_camera_on() && capture_wanted && focused && !menu && !ime;
+            if (capture != captured) {
+                SDL_SetWindowRelativeMouseMode(window, capture);
+                captured = capture;
+                if (captured) {
+                    // a finger the mouse held lifts
+                    emuenv.touch.mouse_button_left = false;
+                    emuenv.touch.mouse_button_right = false;
+                } else
+                    mouse_camera.clear(emuenv);
+                LOG_INFO("Mouse camera: cursor {}", captured ? "captured" : "released");
+            }
+            // motion the test driver sent through the input pipe, as if the captured mouse moved
+            float dx = 0, dy = 0;
+            {
+                const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
+                std::swap(dx, emuenv.ctrl.injected_mouse_dx);
+                std::swap(dy, emuenv.ctrl.injected_mouse_dy);
+            }
+            if (mouse_camera_on())
+                mouse_camera.motion(dx, dy);
+            mouse_camera.update(emuenv, SDL_GetTicksNS());
+        }
         // typed text reaches the game's keyboard dialogs (a player name) only while SDL's text
         // input is on; the session handles Enter, Backspace and Escape itself
         if (window) {
-            const bool ime = is_any_ime_active(emuenv);
             if (ime != SDL_TextInputActive(window)) {
                 if (ime)
                     SDL_StartTextInput(window);

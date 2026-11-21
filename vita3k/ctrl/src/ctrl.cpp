@@ -161,6 +161,8 @@ void refresh_controllers(CtrlState &state, EmuEnvState &emuenv) {
 //   memdump <address> <size> <path>  the frontend writes guest memory there (address, size in hex)
 //   memwrite <address> <bytes>    the frontend writes the bytes (hex, e.g. 0000803f) to guest memory
 //   menu                          the frontend opens or closes its settings menu
+//   mouse <dx> <dy>               relative mouse motion (mouse counts), as if the frontend's captured
+//                                 mouse moved (its mouse camera turns it into the right stick)
 // Buttons: cross circle square triangle up down left right l r l2 r2 l3 r3 start select.
 // Nothing goes through the window, so automated runs never need keyboard focus.
 static uint32_t parse_injected_button(const std::string &name) {
@@ -242,6 +244,12 @@ static void apply_injected_command(CtrlState &state, const std::string &line) {
     } else if (command == "menu") {
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_menu_toggle = true;
+    } else if (command == "mouse") {
+        float dx = 0, dy = 0;
+        words >> dx >> dy;
+        std::lock_guard<std::mutex> guard(state.mutex);
+        state.injected_mouse_dx += dx;
+        state.injected_mouse_dy += dy;
     } else if (command == "screenshot") {
         std::string path;
         std::getline(words >> std::ws, path);
@@ -449,6 +457,7 @@ static void retrieve_ctrl_data(EmuEnvState &emuenv, int port, bool is_v2, bool n
 
     std::array<float, 4> axes{};
     axes.fill(0);
+    bool with_mouse = false; // the port the keyboard drives: the mouse camera's stick is added
 
     const auto reset_axes = [&]() {
         // Re-center joysticks to (128,128). Range is (0-255,0-255).
@@ -470,6 +479,12 @@ static void retrieve_ctrl_data(EmuEnvState &emuenv, int port, bool is_v2, bool n
                     axes[stick + 1] /= length;
                 }
             }
+            // The mouse camera's right stick (CtrlState::mouse_state) is added after that, axis by
+            // axis: Soul Sacrifice Delta turns its camera by each axis on its own, so a diagonal flick
+            // kept inside the circle (0.71 on each axis) turned at a crawl.
+            if (with_mouse)
+                for (int i = 2; i < 4; i++)
+                    axes[i] = std::clamp(axes[i] + state.mouse_state.axes[i], -1.0f, 1.0f);
             lx = float_to_byte(axes[0]);
             ly = float_to_byte(axes[1]);
             rx = float_to_byte(axes[2]);
@@ -489,6 +504,7 @@ static void retrieve_ctrl_data(EmuEnvState &emuenv, int port, bool is_v2, bool n
             apply_keyboard(&buttons, axes.data(), is_v2, emuenv);
             // input injected by a test driver (v3kdrive's pipe) goes where the keyboard goes
             apply_injected(&buttons, axes.data(), is_v2, state);
+            with_mouse = true;
         }
         for (const auto &[_, controller] : state.controllers) {
             if (controller.port + 1 == port) {
@@ -500,6 +516,7 @@ static void retrieve_ctrl_data(EmuEnvState &emuenv, int port, bool is_v2, bool n
         // If not in PSTV mode, every controller input is considered as a port 1 input
         apply_keyboard(&buttons, axes.data(), is_v2, emuenv);
         apply_injected(&buttons, axes.data(), is_v2, state);
+        with_mouse = true;
         for (const auto &[_, controller] : state.controllers) {
             apply_controller(emuenv, &buttons, axes.data(), controller.controller.get(), is_v2);
         }

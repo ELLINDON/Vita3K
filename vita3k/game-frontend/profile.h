@@ -96,6 +96,8 @@ struct Profile {
         uint32_t button = 0;
         std::string label;
     } screen_latch;
+    // how the game's right stick turns its camera, for the mouse camera ([mouse], layout::mouse)
+    StickResponse stick_response;
     // Ad Hoc Play: --player 2-4 run more copies with their own Vita user, config and log
     bool multiplayer = false;
     // the executable has an icon resource with id 101 (its .rc); the window then uses it

@@ -42,6 +42,8 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 // provides WinMain for the windowed executable, which calls main below
@@ -90,6 +92,36 @@ game_frontend::IniSection game_layout() {
     return { "game", "", { language, skip_intro, layout::repatch() } };
 }
 
+// [cheats]: switched in the settings menu while the game runs (apply_cheats)
+game_frontend::IniSection cheats_layout() {
+    game_frontend::IniSection cheats{ "cheats",
+        "Cheats, all off by default. They change the game's values while it runs; on the Cheats page of\n"
+        "the settings menu they switch at once. Money and stats are kept when the game saves, so export\n"
+        "your saves first if you want to go back (--export-save).",
+        {
+            { "infinite_health", Kind::Bool, "false", 0, 0, {},
+                "In missions, your health is refilled to its maximum as soon as it drops. A hit that takes\n"
+                "it all at once can still bring you down." },
+            { "infinite_tools", Kind::Bool, "false", 0, 0, {},
+                "In missions, ninja tools and items don't run out: each one used is given back at once." },
+            { "one_hit_kills", Kind::Bool, "false", 0, 0, {},
+                "In missions, every other character falls to one hit: their health is kept at 1. Allies too,\n"
+                "in a mission that has them." },
+            { "max_money", Kind::Bool, "false", 0, 0, {}, "Keep your money at 9,999,999." },
+            { "max_stats", Kind::Bool, "false", 0, 0, {},
+                "Raise both characters' level to 99, stamina to 200, offence, defence and zankoku to 100 and\n"
+                "SP to 255 (the values of Apollo's save patches). Health follows stamina from the next\n"
+                "mission." },
+        } };
+    for (auto &spec : cheats.settings)
+        spec.live = true;
+    cheats.settings[1].title = "Infinite ninja tools";
+    cheats.settings[2].title = "One-hit kills";
+    cheats.settings[3].title = "Max money";
+    cheats.settings[4].title = "Max stats";
+    return cheats;
+}
+
 game_frontend::IniLayout ini_layout() {
     const std::string id = "shinobido2", exe = id + game_frontend::executable_suffix;
     return {
@@ -106,6 +138,7 @@ game_frontend::IniLayout ini_layout() {
                     layout::mipmaps(true) } },
             audio_layout(),
             game_layout(),
+            cheats_layout(),
             layout::recompiled(id),
             layout::debug(id),
             layout::keyboard(),
@@ -404,6 +437,122 @@ void skip_intro_logos(EmuEnvState &emuenv, IntroSkip &state) {
     state.writes++;
 }
 
+// [cheats] (utakata docs/01-research.md, "Cheats"): values the game keeps in guest memory, set every
+// tick while a cheat is on, after checking that they look as expected. Native code stays on.
+// - The game's record (what a save holds, laid out as data0000.bin) is at 0x8153b530: money at
+//   +0x1434; each character's stats from +0x1444, 0x124 apart (Zen, then Kaede): level, ?, SP, stamina,
+//   offence, defence, ?, zankoku; ninja tools and items from +0x1bfb4 and the equipped ones from
+//   +0x2a3b4, 0xc0 apart, each a 16-bit id and a 16-bit count.
+// - In a mission, *0x814688c8 is the player (cleared when the mission ends; +0x18 is 1), and
+//   *0x81469994 the characters (a count at +0x810, pointers 0x10 apart from +0x10). A character's
+//   health is at +0xc of *(character + 0x8c), its maximum at +0x10.
+constexpr Address RECORD = 0x8153b530;
+constexpr Address PLAYER = 0x814688c8;
+constexpr Address CHARACTERS = 0x81469994;
+constexpr uint32_t ITEMS = 0x1bfb4, EQUIPPED = 0x2a3b4, ITEM_SIZE = 0xc0;
+constexpr int ITEM_SLOTS = 304, EQUIPPED_SLOTS = 8;
+
+struct CheatState {
+    std::set<std::string> logged;
+    // the item and count seen per item record, while Infinite ninja tools is on
+    std::map<Address, std::pair<uint16_t, uint16_t>> counts;
+};
+
+uint32_t *guest_u32(EmuEnvState &emuenv, Address address) {
+    if (!address || !is_valid_addr(emuenv.mem, address) || !is_valid_addr(emuenv.mem, address + 3))
+        return nullptr;
+    return Ptr<uint32_t>(address).get(emuenv.mem);
+}
+
+// a character's health record (current, maximum), when it looks like one
+int32_t *health_of(EmuEnvState &emuenv, Address character) {
+    const uint32_t *const record = guest_u32(emuenv, character + 0x8c);
+    if (!record)
+        return nullptr;
+    int32_t *const health = reinterpret_cast<int32_t *>(guest_u32(emuenv, *record + 0xc));
+    if (!health || !guest_u32(emuenv, *record + 0x10) || health[1] <= 0 || health[1] > 100000 || health[0] > health[1])
+        return nullptr;
+    return health;
+}
+
+void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, CheatState &state) {
+    const auto log_once = [&](const std::string &what) {
+        if (state.logged.insert(what).second)
+            LOG_INFO("cheats: {}", what);
+    };
+    // the record: plausible values where the save has them
+    uint32_t *const money = guest_u32(emuenv, RECORD + 0x1434);
+    uint32_t *const level = guest_u32(emuenv, RECORD + 0x1444);
+    const bool record = money && level && *money <= 99999999 && *level >= 1 && *level <= 99;
+    if (record && values.get_bool("cheats.max_money") && *money != 9999999) {
+        *money = 9999999;
+        log_once("money 9,999,999");
+    }
+    if (record && values.get_bool("cheats.max_stats")) {
+        // offsets from the character's level, and the values Apollo's patches write
+        static constexpr std::pair<uint32_t, uint32_t> STATS[] = { { 0x0, 99 }, { 0x8, 255 }, { 0xc, 200 }, { 0x10, 100 }, { 0x14, 100 }, { 0x1c, 100 } };
+        for (int c = 0; c < 2; c++)
+            for (const auto &[offset, value] : STATS)
+                if (uint32_t *const stat = guest_u32(emuenv, RECORD + 0x1444 + c * 0x124 + offset); stat && *stat < value)
+                    *stat = value;
+        log_once("stats raised");
+    }
+    // a mission: the player, and the characters
+    const uint32_t *const player_ptr = guest_u32(emuenv, PLAYER);
+    const Address player = player_ptr ? *player_ptr : 0;
+    const uint32_t *const flag = player ? guest_u32(emuenv, player + 0x18) : nullptr;
+    const bool mission = flag && *flag == 1;
+    if (!mission) {
+        state.counts.clear();
+        return;
+    }
+    if (values.get_bool("cheats.infinite_health"))
+        if (int32_t *const health = health_of(emuenv, player); health && health[0] < health[1]) {
+            health[0] = health[1];
+            log_once(fmt::format("health kept at {} ({:#x})", health[1], player));
+        }
+    if (values.get_bool("cheats.one_hit_kills")) {
+        const uint32_t *const list_ptr = guest_u32(emuenv, CHARACTERS);
+        const uint32_t *const count = list_ptr ? guest_u32(emuenv, *list_ptr + 0x810) : nullptr;
+        if (count && *count <= 128) {
+            int changed = 0;
+            for (uint32_t i = 0; i < *count; i++) {
+                const uint32_t *const character = guest_u32(emuenv, *list_ptr + 0x10 + i * 0x10);
+                if (!character || !*character || *character == player)
+                    continue;
+                if (int32_t *const health = health_of(emuenv, *character); health && health[0] > 1) {
+                    health[0] = 1;
+                    changed++;
+                }
+            }
+            if (changed)
+                log_once("other characters' health kept at 1");
+        }
+    }
+    if (values.get_bool("cheats.infinite_tools")) {
+        // a count that drops is set back; one that grows (a pick-up) is the new count to keep
+        const auto keep = [&](uint32_t table, int slots) {
+            for (int i = 0; i < slots; i++) {
+                const Address entry = RECORD + table + i * ITEM_SIZE;
+                uint16_t *const item = reinterpret_cast<uint16_t *>(guest_u32(emuenv, entry));
+                if (!item || item[0] == 0 || item[1] == 0 || item[1] > 999)
+                    continue;
+                // another item in this record (the list closed up): start from its count
+                auto [seen, added] = state.counts.try_emplace(entry, item[0], item[1]);
+                if (added || seen->second.first != item[0] || item[1] > seen->second.second)
+                    seen->second = { item[0], item[1] };
+                else if (item[1] < seen->second.second) {
+                    item[1] = seen->second.second;
+                    log_once("ninja tools and items given back");
+                }
+            }
+        };
+        keep(ITEMS, ITEM_SLOTS);
+        keep(EQUIPPED, EQUIPPED_SLOTS);
+    } else
+        state.counts.clear();
+}
+
 // The camera's angles, for the mouse camera (utakata docs/01-research.md, "Mouse camera"): its world
 // matrix is at +0xc0 of the application, row 0 the right vector (sin yaw, 0, -cos yaw), row 2 the
 // forward vector, whose y is sin pitch. Both grow with the right stick pushed right and down.
@@ -508,7 +657,9 @@ int main(int argc, char *argv[]) {
     };
     FrameRate frame_rate;
     IntroSkip intro_skip;
+    CheatState cheats;
     profile.hooks.on_tick = [&](game_frontend::Context &ctx) {
+        apply_cheats(*ctx.emuenv, ctx.settings->values, cheats);
         if (ctx.settings->values.get_int("display.frame_rate") == 60)
             update_frame_rate(*ctx.emuenv, frame_rate);
         if (ctx.settings->values.get_bool("game.skip_intro"))

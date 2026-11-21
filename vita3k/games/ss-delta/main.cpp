@@ -419,25 +419,41 @@ Address skip_intro_logos(EmuEnvState &emuenv, Address done) {
 //     limit), the uses each started the quest with at +0x218 + 4 * slot.
 //   * the save data: *0x81c98618 (the game's own pointer, set from boot). Lacrima at +0x8c, the
 //     Life and Magic levels (u16, 1-99, boot/lowchaos_growth_param.csv) at +0x17ced8 and +0x17ceda.
-//   * how long an offering's effect lasts is data in two of the game's tables, as it holds them from
-//     boot: boot/arms_param.csv for the arms and weapons an offering puts on the right arm (records
-//     of 0x128 bytes: the skill id, the category, the control type, the duration in seconds as a
-//     float at +0xc, the model name at +0x1c; Giant's Arm 70 s), and boot/item_param_ply.csv for the
-//     others (records of 0x6c bytes: the offering id, the duration at +0x40, the skill at +0x5c, the
-//     cast limit at +0x64). Each cast reads them, so a changed duration counts from the next cast. No
-//     pointer leads to them (only a tree of the game's tables), so they are found by their contents.
+//   * how long an offering's effect lasts is data in the game's tables, as it holds them from boot,
+//     read at each cast (so a changed duration counts from the next cast):
+//     - boot/arms_param.csv for the arms and weapons an offering puts on the right arm: records of
+//       0x128 bytes, the skill id, the category, the control type, the duration in seconds as a
+//       float at +0xc, the model name at +0x1c (Giant's Arm: 70 s, ws170_00);
+//     - boot/magic_gimmick_param_ply.csv for summons, armour, healing and most other effects that
+//       stay: records of 0x328 bytes, the skill id, a type, the lifetime float at +0x8 (the fire
+//       golem: 30 s). The table also holds short-lived effects no offering lasts with, so only the
+//       skills of offerings that have a duration are changed;
+//     - boot/protector_param.csv for armour and shields (charms, shield shards): records of 0x11c
+//       bytes; the duration float comes 4 bytes before the skill id, the model name "pa..." right
+//       after it (the stone armour: 50 s, pa240_00.chr). The records are found by the skill id, so
+//       anchor and field offsets count from it;
+//     - boot/item_param_ply.csv, the offerings themselves: records of 0x6c bytes, the offering id,
+//       the duration at +0x40, the skill at +0x5c, the cast limit at +0x64. Its duration is what the
+//       game shows; for the buffs without a gimmick (charms, shield shards) it is the one used.
+//     No pointer leads to the tables (only a tree of the game's tables), so each is found by a known
+//     pair of records.
 struct DurationTable {
     const char *name;
-    uint32_t stride, field; // record size, the duration's offset from the anchor's start
+    uint32_t stride; // record size
+    int32_t field; // the duration's offset from the record's address (the protectors': before it)
     Address anchor = 0; // a known record found in memory, or 0
 };
 
 struct CheatState {
     std::set<std::string> logged; // each cheat logs once per object (player, save data) it changes
     DurationTable arms{ "arms", 0x128, 0xc };
-    DurationTable items{ "offerings", 0x6c, 0x40 };
+    DurationTable gimmicks{ "summon and effect", 0x328, 0x8 };
+    DurationTable protectors{ "armour", 0x11c, -4 };
+    DurationTable items{ "offering", 0x6c, 0x40 };
     int table_wait = 0; // ticks until the next search (the game loads its tables after boot)
     int table_searches = 0;
+    int apply_wait = 0; // ticks until the tables are gone over again (once a second)
+    Address lasting_text = 0; // "9999" in guest memory, for the buffs' durations (kept for the session)
     std::map<Address, uint32_t> saved_durations; // durations as the game had them, while changed
 };
 
@@ -460,10 +476,23 @@ bool model_at(MemState &mem, Address a, const char *model) {
     return is_valid_addr_range(mem, a, a + static_cast<Address>(n)) && std::memcmp(Ptr<char>(a).get(mem), model, n) == 0;
 }
 
-// Giant's Arm and its next rank, as in the game's data: arms (skill 1140000, 60 s, ws140_00; then
-// 1140100, ws140_01) and offerings (102000: skill 1102005, 15 casts; then 102030: 1102035, 6 casts)
+// Two neighbouring records of each table, as in the game's data: arms (skill 1140000, ws140_00;
+// then 1140100, ws140_01), gimmicks (80100, type 31, lifetime 0; then 81100, type 14, 0.5 s) and
+// offerings (102000: skill 1102005, 15 casts; then 102030: 1102035, 6 casts)
 bool arms_anchor(MemState &mem, Address a) {
     return word_at(mem, a) == 1140000 && model_at(mem, a + 0x1c, "ws140_00") && word_at(mem, a + 0x128) == 1140100 && model_at(mem, a + 0x128 + 0x1c, "ws140_01");
+}
+
+bool gimmicks_anchor(MemState &mem, Address a) {
+    return word_at(mem, a) == 80100 && word_at(mem, a + 4) == 31 && float_at(mem, a + 8) == 0.0f
+        && word_at(mem, a + 0x328) == 81100 && word_at(mem, a + 0x328 + 4) == 14 && float_at(mem, a + 0x328 + 8) == 0.5f;
+}
+
+// protectors: the stone armour (1240000, pa240_00.chr), then its next rank (1240010). Not by the
+// duration in front of the id: the cheat changes it
+bool protectors_anchor(MemState &mem, Address a) {
+    return word_at(mem, a) == 1240000 && model_at(mem, a + 4, "pa240_00.chr")
+        && word_at(mem, a + 0x11c) == 1240010 && model_at(mem, a + 0x11c + 4, "pa240_01.chr");
 }
 
 bool items_anchor(MemState &mem, Address a) {
@@ -471,24 +500,45 @@ bool items_anchor(MemState &mem, Address a) {
         && word_at(mem, a + 0x6c) == 102030 && word_at(mem, a + 0x6c + 0x5c) == 1102035 && word_at(mem, a + 0x6c + 0x64) == 6;
 }
 
-// a record of the table: an arm's has a model name "ws..." and a duration of 0-10000 s; an
-// offering's an id, a cast limit 1-9999 and a skill id 1xxxxxx
-bool is_duration_record(MemState &mem, const DurationTable &table, Address a) {
+bool anchor_valid(MemState &mem, const CheatState &state, const DurationTable &table) {
+    if (!table.anchor)
+        return false;
+    if (&table == &state.arms)
+        return arms_anchor(mem, table.anchor);
+    if (&table == &state.gimmicks)
+        return gimmicks_anchor(mem, table.anchor);
+    if (&table == &state.protectors)
+        return protectors_anchor(mem, table.anchor);
+    return items_anchor(mem, table.anchor);
+}
+
+// a record of the table: an arm's has a model name "ws..." and a duration of 0-10000 s; a
+// gimmick's a skill id, a small type and a lifetime of -1 to 10000 s; an offering's an id, a cast
+// limit 1-9999 and a skill id 1xxxxxx
+bool is_duration_record(MemState &mem, const CheatState &state, const DurationTable &table, Address a) {
     if (!is_valid_addr_range(mem, a, a + table.stride))
         return false;
-    if (table.field == 0xc) {
+    if (&table == &state.arms) {
         const float duration = float_at(mem, a + 0xc);
-        return word_at(mem, a) < 3000000 && is_valid_addr_range(mem, a + 0x1c, a + 0x1e) && std::memcmp(Ptr<char>(a + 0x1c).get(mem), "ws", 2) == 0
+        return word_at(mem, a) < 3000000 && std::memcmp(Ptr<char>(a + 0x1c).get(mem), "ws", 2) == 0 && duration >= 0 && duration <= 10000;
+    }
+    if (&table == &state.gimmicks) {
+        const float lifetime = float_at(mem, a + 8);
+        return word_at(mem, a) < 3000000 && word_at(mem, a + 4) < 1000 && lifetime >= -1 && lifetime <= 10000;
+    }
+    if (&table == &state.protectors) {
+        const float duration = float_at(mem, a - 4);
+        return word_at(mem, a) < 3000000 && is_valid_addr_range(mem, a - 4, a + 6) && std::memcmp(Ptr<char>(a + 4).get(mem), "pa", 2) == 0
             && duration >= 0 && duration <= 10000;
     }
     const uint32_t id = word_at(mem, a), skill = word_at(mem, a + 0x5c), casts = word_at(mem, a + 0x64);
     return id >= 100000 && id < 2000000 && casts >= 1 && casts <= 9999 && skill >= 1000000 && skill < 3000000;
 }
 
-// Both anchors in one pass over the main heap, 4-byte aligned
+// The anchors in one pass over the main heap, 4-byte aligned
 void find_duration_tables(MemState &mem, CheatState &state) {
     constexpr Address START = 0x81000000, END = 0x90000000, PAGE = 0x1000;
-    for (Address page = START; page < END && !(state.arms.anchor && state.items.anchor); page += PAGE) {
+    for (Address page = START; page < END && !(state.arms.anchor && state.gimmicks.anchor && state.protectors.anchor && state.items.anchor); page += PAGE) {
         if (!is_valid_addr(mem, page))
             continue;
         const uint32_t *const words = Ptr<uint32_t>(page).get(mem);
@@ -496,15 +546,64 @@ void find_duration_tables(MemState &mem, CheatState &state) {
             const Address a = page + i * 4;
             if (!state.arms.anchor && words[i] == 1140000 && arms_anchor(mem, a))
                 state.arms.anchor = a;
+            else if (!state.gimmicks.anchor && words[i] == 80100 && gimmicks_anchor(mem, a))
+                state.gimmicks.anchor = a;
+            else if (!state.protectors.anchor && words[i] == 1240000 && protectors_anchor(mem, a))
+                state.protectors.anchor = a;
             else if (!state.items.anchor && words[i] == 102000 && items_anchor(mem, a))
                 state.items.anchor = a;
         }
     }
 }
 
+// the first record of the table: walked back from the anchor while the records look like its own
+Address first_record(MemState &mem, const CheatState &state, const DurationTable &table) {
+    Address first = table.anchor;
+    while (is_duration_record(mem, state, table, first - table.stride))
+        first -= table.stride;
+    return first;
+}
+
+// The self-buffs (gimmick type 16: healing over time, speed, the falcon feathers' dash ...) take their
+// duration from the record's "general parameter 1", which the game keeps as text: from +0x14 each
+// parameter is a string object of 8 bytes, a class word (0x81c5abbc) and a pointer to the text in
+// the table's string pool (the falcon feather: "80" at +0x20). The text is parsed at each cast. The
+// pool is packed, so the pointer is pointed at "9999" in a page of guest memory of our own; the
+// game's pointer goes back with the other durations. Only where the text is the offering's duration.
+void apply_buff_durations(MemState &mem, CheatState &state, const std::map<uint32_t, float> &lasting_skills) {
+    constexpr uint32_t BUFF_TYPE = 16, STRING_CLASS = 0x81c5abbc;
+    int changed = 0;
+    for (Address a = first_record(mem, state, state.gimmicks); is_duration_record(mem, state, state.gimmicks, a); a += state.gimmicks.stride) {
+        const auto skill = lasting_skills.find(word_at(mem, a));
+        if (skill == lasting_skills.end() || word_at(mem, a + 4) != BUFF_TYPE || word_at(mem, a + 0x1c) != STRING_CLASS)
+            continue;
+        const Address field = a + 0x20, text = word_at(mem, field);
+        if (!text || text == state.lasting_text || !is_valid_addr_range(mem, text, text + 16))
+            continue;
+        char value[17] = {};
+        std::memcpy(value, Ptr<char>(text).get(mem), 16);
+        char *end = nullptr;
+        const float seconds = std::strtof(value, &end);
+        if (end == value || *end != '\0' || std::fabs(seconds - skill->second) > 0.01f)
+            continue; // not this offering's duration
+        if (!state.lasting_text) {
+            state.lasting_text = alloc(mem, 16, "ss-delta cheats");
+            if (!state.lasting_text) {
+                LOG_WARN("cheats: lasting offerings: no guest memory for the buffs' duration; buffs keep theirs");
+                return;
+            }
+            std::memcpy(Ptr<char>(state.lasting_text).get(mem), "9999", 5);
+        }
+        state.saved_durations.emplace(field, text);
+        *Ptr<uint32_t>(field).get(mem) = state.lasting_text;
+        changed++;
+    }
+    if (changed)
+        LOG_INFO("cheats: lasting offerings: {} buffs last {} s from their next cast", changed, LASTING_SECONDS);
+}
+
 // [cheats] long_offerings: every offering's effect with a duration (arms, armour, buffs, summons)
-// lasts 9999 s, past the end of any quest. Each table is walked both ways from its anchor while the
-// records look like its records; the game's durations go back when the cheat is off.
+// lasts 9999 s, past the end of any quest. The game's durations go back when the cheat is off.
 void apply_offering_durations(EmuEnvState &emuenv, bool on, CheatState &state) {
     auto &mem = emuenv.mem;
     if (!on) {
@@ -514,35 +613,49 @@ void apply_offering_durations(EmuEnvState &emuenv, bool on, CheatState &state) {
         if (!state.saved_durations.empty())
             LOG_INFO("cheats: offering durations back as the game has them ({})", state.saved_durations.size());
         state.saved_durations.clear();
+        state.apply_wait = 0;
         return;
     }
-    if (state.arms.anchor && !arms_anchor(mem, state.arms.anchor))
-        state.arms.anchor = 0;
-    if (state.items.anchor && !items_anchor(mem, state.items.anchor))
-        state.items.anchor = 0;
-    if (!state.arms.anchor || !state.items.anchor) {
+    for (DurationTable *table : { &state.arms, &state.gimmicks, &state.protectors, &state.items })
+        if (table->anchor && !anchor_valid(mem, state, *table))
+            table->anchor = 0;
+    if (!state.arms.anchor || !state.gimmicks.anchor || !state.protectors.anchor || !state.items.anchor) {
         // searched about every 2 s until found: the tables load a few seconds after boot
         if (state.table_wait-- > 0)
             return;
         state.table_wait = 120;
         find_duration_tables(mem, state);
-        if (!state.arms.anchor || !state.items.anchor) {
+        if (!state.arms.anchor || !state.gimmicks.anchor || !state.protectors.anchor || !state.items.anchor) {
             if (++state.table_searches == 30)
-                LOG_WARN("cheats: lasting offerings: the {} table isn't found after a minute; waiting for it", !state.arms.anchor ? "arms" : "offerings");
+                LOG_WARN("cheats: lasting offerings: the {} table isn't found after a minute; waiting for it",
+                    !state.arms.anchor ? "arms" : !state.gimmicks.anchor ? "summon and effect" : !state.protectors.anchor ? "armour" : "offering");
             return;
         }
-        LOG_INFO("cheats: duration tables: arms at {:#x}, offerings at {:#x}", state.arms.anchor, state.items.anchor);
+        LOG_INFO("cheats: duration tables: arms at {:#x}, summons and effects at {:#x}, armour at {:#x}, offerings at {:#x}",
+            state.arms.anchor, state.gimmicks.anchor, state.protectors.anchor, state.items.anchor);
     }
-    for (const DurationTable *table : { &state.arms, &state.items }) {
-        Address first = table->anchor;
-        while (is_duration_record(mem, *table, first - table->stride))
-            first -= table->stride;
+    if (state.apply_wait-- > 0)
+        return;
+    state.apply_wait = 60;
+    // the skills of the offerings that have a duration, with the duration as the game has it
+    std::map<uint32_t, float> lasting_skills;
+    for (Address a = first_record(mem, state, state.items); is_duration_record(mem, state, state.items, a); a += state.items.stride) {
+        float duration = float_at(mem, a + 0x40);
+        if (const auto saved = state.saved_durations.find(a + 0x40); saved != state.saved_durations.end())
+            std::memcpy(&duration, &saved->second, 4);
+        if (duration > 0)
+            lasting_skills.emplace(word_at(mem, a + 0x5c), duration);
+    }
+    apply_buff_durations(mem, state, lasting_skills);
+    for (const DurationTable *table : { &state.arms, &state.gimmicks, &state.protectors, &state.items }) {
         int changed = 0, records = 0;
-        for (Address a = first; is_duration_record(mem, *table, a); a += table->stride, records++) {
-            const Address field = a + table->field;
+        for (Address a = first_record(mem, state, *table); is_duration_record(mem, state, *table, a); a += table->stride, records++) {
+            if (table == &state.gimmicks && !lasting_skills.contains(word_at(mem, a)))
+                continue; // not an offering's lasting effect
+            const Address field = static_cast<Address>(static_cast<int64_t>(a) + table->field);
             const float duration = float_at(mem, field);
-            if (!(duration > 0) || duration >= LASTING_SECONDS)
-                continue; // no duration (0), no limit (-1), or already changed
+            if (!(duration > 0) || duration >= 999)
+                continue; // no duration (0), no limit (-1, or 999 for a few), or already changed
             state.saved_durations.emplace(field, word_at(mem, field));
             std::memcpy(Ptr<uint8_t>(field).get(mem), &LASTING_SECONDS, 4);
             changed++;

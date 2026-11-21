@@ -703,6 +703,9 @@ int main(int argc, char *argv[]) {
     profile.ini = ini_layout();
     profile.default_touches = { { "caution", 896, 260, "F", "righttrigger" } };
     profile.touch_targets["caution"] = caution_eye;
+    // crouching (sneaking, clinging to a wall) is R held: on a phone's on-screen controls, a toggle holds
+    // it while the thumbs move and attack (utakata Phase 11d)
+    profile.screen_latch = { SCE_CTRL_R1, "CROUCH" };
     // the right stick turns the camera at one speed (utakata docs/01-research.md, "Mouse camera"): past
     // 77 steps of 127 from the centre, 120 degrees a second left and right and 60 up and down; nothing
     // closer to the centre

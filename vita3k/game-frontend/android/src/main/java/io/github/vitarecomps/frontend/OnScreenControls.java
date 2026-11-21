@@ -208,7 +208,7 @@ public class OnScreenControls extends View {
         if (!controlsShown())
             releaseControls();
         else if (open && latched) {
-            // the menu pages with L; a latched L would keep its L from registering
+            // the menu pages with L and R; a latched shoulder button would keep its press from registering
             latched = false;
             latch.pressed = false;
             send();
@@ -300,8 +300,11 @@ public class OnScreenControls extends View {
 
         l.rect.set(left, top, left + 96 * u, top + 42 * u);
         r.rect.set(right - 96 * u, top, right, top + 42 * u);
-        // the latch beside L, smaller (the lock-on goes with L)
-        if (latch != null)
+        // the latch beside the shoulder button it holds, smaller (ss-delta's lock-on goes with L,
+        // Shinobido 2's crouch with R); beside L for any other button
+        if (latch != null && latch.bit == R1)
+            latch.rect.set(r.rect.left - 88 * u, top + 4 * u, r.rect.left - 12 * u, top + 38 * u);
+        else if (latch != null)
             latch.rect.set(l.rect.right + 12 * u, top + 4 * u, l.rect.right + 88 * u, top + 38 * u);
 
         // the game's touch spots on the screen, where Vita3K draws the picture: 960x544 fitted in the middle

@@ -93,11 +93,13 @@ android {
 	}
 }
 
-// data/ and shaders-builtin/ under the APK's assets, where SDL_IOFromFile finds them by their
-// relative paths (the frontend's static assets path is empty on Android)
+// data/, shaders-builtin/ and icons/ under the APK's assets, where SDL_IOFromFile finds them by their
+// relative paths (the frontend's static assets path is empty on Android); the system dialogs draw their
+// buttons' icons from icons/ (the desktop release has the folder beside the executable)
 def copyGameAssets = tasks.register('copyGameAssets', Sync) {
 	from("${fork}/data") { into 'data' }
 	from("${fork}/vita3k/shaders-builtin") { into 'shaders-builtin' }
+	from("${fork}/vita3k/icons") { include '*.png'; into 'icons' }
 	into layout.buildDirectory.dir('game-assets')
 }
 tasks.named('preBuild') { dependsOn copyGameAssets }

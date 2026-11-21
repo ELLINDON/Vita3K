@@ -182,8 +182,8 @@ public class BuildActivity extends Activity {
         column.addView(title);
         rebuild = canRebuild();
         TextView intro = text(rebuild
-            ? "This version of the app builds the game's native code again, from the game installed here: about 15 "
-              + "minutes on a fast device, with 5 GB of free space while it runs. Keep the device charging. Your "
+            ? "This version of the app builds the game's native code again, from the game installed here: about "
+              + buildMinutes() + " minutes on a fast device, with 5 GB of free space while it runs. Keep the device charging. Your "
               + "dump isn't needed (add it only to install the game again)."
             : "The game is built on this device from your own copy of it: a dump of the PS Vita game (a NoNpDrm .zip "
               + "or .vpk; zip a dumped folder first), or a .pkg with its licence file (work.bin or .rif). Add the "
@@ -191,7 +191,7 @@ public class BuildActivity extends Activity {
               + "rePatch mod (a .zip with its rePatch folder); add-ons and mods can also be added later, from the "
               + "app icon's long-press menu. The PS Vita firmware comes from Sony's "
               + "servers (190 MB).\n\n"
-              + "Building takes about 15 minutes on a fast device and needs about 10 GB of free space (5 GB of it "
+              + "Building takes about " + buildMinutes() + " minutes on a fast device and needs about 10 GB of free space (5 GB of it "
               + "only while building). Keep the device charging. Nothing leaves the device.", 15, false);
         intro.setPadding(0, dp(8), 0, dp(12));
         column.addView(intro);
@@ -446,7 +446,8 @@ public class BuildActivity extends Activity {
                 run();
             } else {
                 synchronized (BuildService.state) {
-                    BuildService.state.error = STEP_NAMES[step] + " failed (the game's log: ss-delta/vita3k.log in the app's folder).";
+                    BuildService.state.error = STEP_NAMES[step] + " failed (the game's log: " + game().optString("id")
+                        + "/vita3k.log in the app's folder).";
                 }
                 refresh();
             }
@@ -593,6 +594,11 @@ public class BuildActivity extends Activity {
             Log.w(TAG, "game.json", e);
         }
         return game;
+    }
+
+    /** How long the build takes on a fast device (game.json android_build_minutes; ss-delta's 15 when absent). */
+    private int buildMinutes() {
+        return game().optInt("android_build_minutes", 15);
     }
 
     private String gameName() {

@@ -167,6 +167,27 @@ game_frontend::IniLayout ini_layout() {
     game.settings.push_back(game_frontend::button_labels_setting());
     // the Undub patch (Japanese voices, ss-delta docs/01-research.md, "Undub patch") is a rePatch mod
     game.settings.push_back(game_frontend::layout::repatch());
+    // [cheats] (GitHub issue #7): switched in the settings menu while the game runs (apply_cheats)
+    IniSection cheats{ "cheats",
+        "Cheats, all off by default. They change the game's values while it runs; on the Cheats page of\n"
+        "the settings menu they switch at once. What they change is kept when the game saves (Lacrima,\n"
+        "levels), so export a save first if you want to go back (--export-save). In Ad Hoc Play they\n"
+        "change only this player.",
+        {
+            { "infinite_health", Kind::Bool, "false", 0, 0, {},
+                "In quests, your health is refilled to its maximum as soon as it drops. A hit that takes it\n"
+                "all at once can still bring you down." },
+            { "infinite_offerings", Kind::Bool, "false", 0, 0, {},
+                "In quests, offerings don't run out: each is refilled to the uses it started the quest with." },
+            { "max_lacrima", Kind::Bool, "false", 0, 0, {}, "Keep Lacrima at 9,999,999." },
+            { "max_levels", Kind::Bool, "false", 0, 0, {},
+                "Raise the Life and Magic levels to 99, the highest." },
+        } };
+    for (auto &spec : cheats.settings)
+        spec.live = true;
+    cheats.settings[1].title = "Unlimited offerings";
+    cheats.settings[2].title = "Max Lacrima";
+    cheats.settings[3].title = "Max levels";
     // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
     // rarely used for several copies on one machine, and with local its rooms never reached the network
 #ifdef _WIN32
@@ -207,6 +228,7 @@ game_frontend::IniLayout ini_layout() {
             display,
             layout::audio(),
             game,
+            cheats,
             multiplayer,
             layout::recompiled(id),
             layout::debug(id),
@@ -378,6 +400,100 @@ Address skip_intro_logos(EmuEnvState &emuenv, Address done) {
     return control;
 }
 
+// [cheats] (GitHub issue #7; ss-delta docs/01-research.md, "Cheats"): values the game keeps in
+// guest memory, set every frame while a cheat is on. Native code stays on, as for skip_intro.
+// Addresses from the VitaCheat codes for 1.30 (r0ah, tomberyx), checked in our build:
+//   * the quest's player: *(*0x81c98f00 + 0x18), set during a quest only (0 otherwise); the player
+//     object's vtable is 0x81c61f6c, the quest's 0x81c7a40c. HP is a float at +0x58, its maximum an
+//     int at +0xf8. Offering slots 0-5: uses left at +0x200 + 4 * slot (-1: empty slot, 9999: no
+//     limit), the uses each started the quest with at +0x218 + 4 * slot.
+//   * the save data: *0x81c98618 (the game's own pointer, set from boot). Lacrima at +0x8c, the
+//     Life and Magic levels (u16, 1-99, boot/lowchaos_growth_param.csv) at +0x17ced8 and +0x17ceda.
+struct CheatState {
+    std::set<std::string> logged; // each cheat logs once per object (player, save data) it changes
+};
+
+constexpr uint32_t LACRIMA_MAX = 9999999, LEVEL_MAX = 99;
+
+void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, CheatState &state) {
+    constexpr Address QUEST_HOLDER = 0x81c98f00, SAVE_HOLDER = 0x81c98618;
+    constexpr uint32_t QUEST_VTABLE = 0x81c7a40c, PLAYER_VTABLE = 0x81c61f6c;
+    auto &mem = emuenv.mem;
+    const auto u32 = [&](Address a) -> uint32_t * { return is_valid_addr_range(mem, a, a + 4) ? Ptr<uint32_t>(a).get(mem) : nullptr; };
+    const auto once = [&](const std::string &what, Address object) {
+        if (state.logged.insert(fmt::format("{} {:#x}", what, object)).second)
+            LOG_INFO("cheats: {} ({:#x})", what, object);
+    };
+
+    const bool health = values.get_bool("cheats.infinite_health");
+    const bool offerings = values.get_bool("cheats.infinite_offerings");
+    if (health || offerings) {
+        const uint32_t *const quest_holder = u32(QUEST_HOLDER);
+        const uint32_t *const quest = quest_holder && *quest_holder ? u32(*quest_holder) : nullptr;
+        const uint32_t *const player_ref = quest && *quest == QUEST_VTABLE ? u32(*quest_holder + 0x18) : nullptr;
+        const Address player = player_ref ? *player_ref : 0;
+        const uint32_t *const vtable = player ? u32(player) : nullptr;
+        if (vtable && *vtable == PLAYER_VTABLE && is_valid_addr_range(mem, player, player + 0x230)) {
+            uint8_t *const p = Ptr<uint8_t>(player).get(mem);
+            if (health) {
+                float hp;
+                int32_t max_hp;
+                std::memcpy(&hp, p + 0x58, 4);
+                std::memcpy(&max_hp, p + 0xf8, 4);
+                // not once health is 0: the game has started the player's death (or a rescue) by then
+                if (hp > 0 && max_hp > 0 && max_hp < 1000000 && hp < static_cast<float>(max_hp)) {
+                    const float full = static_cast<float>(max_hp);
+                    std::memcpy(p + 0x58, &full, 4);
+                    once("infinite health", player);
+                }
+            }
+            if (offerings) {
+                for (int slot = 0; slot < 6; slot++) {
+                    int32_t left, start;
+                    std::memcpy(&left, p + 0x200 + 4 * slot, 4);
+                    std::memcpy(&start, p + 0x218 + 4 * slot, 4);
+                    if (left >= 0 && start > 0 && start < 9999 && left < start) {
+                        std::memcpy(p + 0x200 + 4 * slot, &start, 4);
+                        once("unlimited offering uses", player);
+                    }
+                }
+            }
+        }
+    }
+
+    const bool lacrima = values.get_bool("cheats.max_lacrima");
+    const bool levels = values.get_bool("cheats.max_levels");
+    if (lacrima || levels) {
+        const uint32_t *const save_holder = u32(SAVE_HOLDER);
+        const Address save = save_holder ? *save_holder : 0;
+        if (save && is_valid_addr_range(mem, save, save + 0x17cedc)) {
+            uint8_t *const s = Ptr<uint8_t>(save).get(mem);
+            uint32_t count;
+            uint16_t life, magic;
+            std::memcpy(&count, s + 0x8c, 4);
+            std::memcpy(&life, s + 0x17ced8, 2);
+            std::memcpy(&magic, s + 0x17ceda, 2);
+            // values the game itself could hold, so a wrong pointer is not written through
+            const bool plausible = count <= LACRIMA_MAX && life >= 1 && life <= LEVEL_MAX && magic >= 1 && magic <= LEVEL_MAX;
+            if (!plausible) {
+                if (state.logged.insert(fmt::format("implausible {:#x}", save)).second)
+                    LOG_WARN("cheats: unexpected save data at {:#x} (Lacrima {}, levels {} / {}); left alone", save, count, life, magic);
+            } else {
+                if (lacrima && count != LACRIMA_MAX) {
+                    std::memcpy(s + 0x8c, &LACRIMA_MAX, 4);
+                    once("max Lacrima", save);
+                }
+                if (levels && (life != LEVEL_MAX || magic != LEVEL_MAX)) {
+                    const uint16_t max = LEVEL_MAX;
+                    std::memcpy(s + 0x17ced8, &max, 2);
+                    std::memcpy(s + 0x17ceda, &max, 2);
+                    once("max levels", save);
+                }
+            }
+        }
+    }
+}
+
 // the game's textures with PlayStation buttons (the com_001_* icon atlases, tutorial pictures, the
 // font page with the text's symbols) and the symbols in them, all languages (ss-delta
 // tools/button-atlases.py; docs/01-research.md, "Button prompts")
@@ -444,6 +560,7 @@ int main(int argc, char *argv[]) {
     game_frontend::ButtonLabels button_labels(button_atlases());
     int frame_rate = 30; // what update_frame_rate last set (-1: left alone)
     Address intro_skipped = 0; // the logo control task skip_intro_logos handled
+    CheatState cheats;
 
     game_frontend::Profile profile;
     profile.title_id = TITLE_ID;
@@ -565,6 +682,7 @@ int main(int argc, char *argv[]) {
             frame_rate = update_frame_rate(*ctx.emuenv, fps, frame_rate);
         if (ctx.settings->values.get_bool("game.skip_intro"))
             intro_skipped = skip_intro_logos(*ctx.emuenv, intro_skipped);
+        apply_cheats(*ctx.emuenv, ctx.settings->values, cheats);
         if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
             // auto: from the first connected gamepad's own labels (it may change while the game runs)
             std::string style = ctx.settings->values.get("game.button_labels");

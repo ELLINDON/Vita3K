@@ -85,6 +85,8 @@ struct CtrlState {
     std::vector<std::string> injected_screenshots;
     // (path, guest address, size) dumps of guest memory the test driver asked for (the frontend writes them)
     std::vector<std::tuple<std::string, uint32_t, uint32_t>> injected_memdumps;
+    // (guest address, bytes) writes to guest memory the test driver asked for (the frontend makes them)
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> injected_memwrites;
     // the test driver asked to open or close a front end's settings menu
     bool injected_menu_toggle = false;
     // (frame count, folder) recordings the test driver asked for

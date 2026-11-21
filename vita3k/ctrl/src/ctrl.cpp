@@ -25,6 +25,7 @@
 #include <kernel/state.h>
 #include <util/log.h>
 
+#include <cctype>
 #include <cmath>
 #include <map>
 #include <mutex>
@@ -158,6 +159,7 @@ void refresh_controllers(CtrlState &state, EmuEnvState &emuenv) {
 //   screenshot <path>             the frontend saves the current frame there, at render resolution
 //   record <count> <dir>          the frontend saves the next <count> rendered frames into <dir>
 //   memdump <address> <size> <path>  the frontend writes guest memory there (address, size in hex)
+//   memwrite <address> <bytes>    the frontend writes the bytes (hex, e.g. 0000803f) to guest memory
 //   menu                          the frontend opens or closes its settings menu
 // Buttons: cross circle square triangle up down left right l r l2 r2 l3 r3 start select.
 // Nothing goes through the window, so automated runs never need keyboard focus.
@@ -222,6 +224,21 @@ static void apply_injected_command(CtrlState &state, const std::string &line) {
         std::getline(words >> std::ws, path);
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_memdumps.emplace_back(path, address, size);
+    } else if (command == "memwrite") {
+        uint32_t address = 0;
+        std::string hex;
+        words >> std::hex >> address >> std::dec >> hex;
+        std::vector<uint8_t> bytes;
+        for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+            const auto digit = [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; };
+            if (!digit(hex[i]) || !digit(hex[i + 1])) {
+                LOG_WARN("Input pipe: memwrite needs hex bytes, got '{}'", hex);
+                return;
+            }
+            bytes.push_back(static_cast<uint8_t>(std::stoul(hex.substr(i, 2), nullptr, 16)));
+        }
+        std::lock_guard<std::mutex> guard(state.mutex);
+        state.injected_memwrites.emplace_back(address, std::move(bytes));
     } else if (command == "menu") {
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_menu_toggle = true;

@@ -961,11 +961,22 @@ int run(Profile &profile, int argc, char *argv[]) {
         std::vector<std::string> shots;
         std::vector<std::pair<int, std::string>> records;
         std::vector<std::tuple<std::string, uint32_t, uint32_t>> memdumps;
+        std::vector<std::pair<uint32_t, std::vector<uint8_t>>> memwrites;
         {
             const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
             shots.swap(emuenv.ctrl.injected_screenshots);
             records.swap(emuenv.ctrl.injected_records);
             memdumps.swap(emuenv.ctrl.injected_memdumps);
+            memwrites.swap(emuenv.ctrl.injected_memwrites);
+        }
+        for (const auto &[address, bytes] : memwrites) {
+            // guest memory for research (tools/v3kdrive.py memwrite:), when every byte is mapped
+            const uint32_t size = static_cast<uint32_t>(bytes.size());
+            if (size && is_valid_addr_range(emuenv.mem, address, address + size)) {
+                std::memcpy(Ptr<uint8_t>(address).get(emuenv.mem), bytes.data(), size);
+                LOG_INFO("memwrite: {} bytes at {:#x}", size, address);
+            } else
+                LOG_WARN("memwrite: {:#x}+{:#x} is not mapped", address, size);
         }
         for (const auto &[path, address, size] : memdumps) {
             // guest memory for research (tools/v3kdrive.py memdump:); pages that are not mapped read as 0

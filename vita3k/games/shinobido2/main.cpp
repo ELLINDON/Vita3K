@@ -82,7 +82,11 @@ game_frontend::IniSection game_layout() {
         "starts." };
     language.title = "Language";
     language.choice_labels = { "English", "French", "Spanish" };
-    return { "game", "", { language, layout::repatch() } };
+    game_frontend::SettingSpec skip_intro{ "skip_intro", Kind::Bool, "false", 0, 0, {},
+        "Skip the company logos at start: the opening movie follows the loading screen at once (Start\n"
+        "skips that, as on the Vita)." };
+    skip_intro.title = "Skip intro logos";
+    return { "game", "", { language, skip_intro, layout::repatch() } };
 }
 
 game_frontend::IniLayout ini_layout() {
@@ -348,6 +352,53 @@ void update_frame_rate(EmuEnvState &emuenv, FrameRate &state) {
     LOG_INFO("frame_rate: {}", !scene ? "60 fps" : menus ? "menus (no mission): 30 fps" : "an event scene after a load: 30 fps");
 }
 
+// [game] skip_intro (utakata docs/01-research.md, "Boot logos"): the opening scene (vtable 0x81441534,
+// update 0x810040ae) steps through its states: 0-1 the Bandai Namco picture (3 s), 2-3 Spike's logo
+// movie, 4-5 Acquire's, 6-7 the Havok picture (1.5 s), 8-9 the opening movie, 10 the title. A state
+// is entered when the byte at +0xc is set, with +0x10 its timer. The application (*0x8146c2b0) keeps
+// its scene manager at +0x1e4, and the manager the current scene at +4. While the first picture is
+// up, the scene is moved on to the opening movie (Start skips that, as on the Vita): data only, so
+// native code stays on.
+constexpr Address OPENING_SCENE_VTABLE = 0x81441534;
+
+struct IntroSkip {
+    bool done = false;
+    int writes = 0;
+};
+
+void skip_intro_logos(EmuEnvState &emuenv, IntroSkip &state) {
+    if (state.done)
+        return;
+    const int64_t app = read_guest(emuenv, 0x8146c2b0, 4);
+    const int64_t manager = app > 0 ? read_guest(emuenv, static_cast<Address>(app) + 0x1e4, 4) : -1;
+    const int64_t scene = manager > 0 ? read_guest(emuenv, static_cast<Address>(manager) + 4, 4) : -1;
+    if (scene <= 0 || read_guest(emuenv, static_cast<Address>(scene), 4) != OPENING_SCENE_VTABLE)
+        return;
+    const Address s = static_cast<Address>(scene);
+    const int64_t current = read_guest(emuenv, s + 8, 4);
+    if (current < 0)
+        return;
+    if (current >= 8) {
+        state.done = true;
+        LOG_INFO("skip_intro: {}", state.writes ? "the boot logos skipped" : "the logos had already played");
+        return;
+    }
+    if (current > 1) {
+        // a logo movie is already playing: moving on now would start a second one on the same player
+        state.done = true;
+        LOG_INFO("skip_intro: too late, the logo movies have started");
+        return;
+    }
+    // the opening movie, entered on the scene's next update (the game may move from 0 to 1 at the same
+    // time; the next tick then writes again)
+    const uint32_t opening = 8, zero = 0;
+    const uint8_t enter = 1;
+    std::memcpy(Ptr<uint8_t>(s + 0x10).get(emuenv.mem), &zero, 4);
+    std::memcpy(Ptr<uint8_t>(s + 8).get(emuenv.mem), &opening, 4);
+    std::memcpy(Ptr<uint8_t>(s + 0xc).get(emuenv.mem), &enter, 1);
+    state.writes++;
+}
+
 // --import-save / --export-save
 struct SaveCommand {
     std::string import_from, export_to;
@@ -423,9 +474,12 @@ int main(int argc, char *argv[]) {
         LOG_INFO("audio effects (reverb, fade-outs): {}", effects ? "on" : "off");
     };
     FrameRate frame_rate;
+    IntroSkip intro_skip;
     profile.hooks.on_tick = [&](game_frontend::Context &ctx) {
         if (ctx.settings->values.get_int("display.frame_rate") == 60)
             update_frame_rate(*ctx.emuenv, frame_rate);
+        if (ctx.settings->values.get_bool("game.skip_intro"))
+            skip_intro_logos(*ctx.emuenv, intro_skip);
     };
     return game_frontend::run(profile, argc, argv);
 }

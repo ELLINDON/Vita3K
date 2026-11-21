@@ -290,8 +290,11 @@ float StickResponse::push_for(float speed) const {
     return points.back().first;
 }
 
-void MouseCamera::configure(const StickResponse &response, const Options &options) {
-    this->response = response;
+void MouseCamera::configure(const StickResponse &response_x, const StickResponse &response_y, const Options &options,
+    CameraAngles angles) {
+    responses[0] = response_x;
+    responses[1] = response_y;
+    this->angles = std::move(angles);
     this->options = options;
 }
 
@@ -301,7 +304,7 @@ void MouseCamera::motion(float dx, float dy) {
     axes[1].pending += dy * degrees * (options.invert_y ? -1.0f : 1.0f);
 }
 
-float MouseCamera::stick_for(Axis &axis, float dt) const {
+float MouseCamera::stick_for(Axis &axis, const StickResponse &response, float dt) const {
     // what the stick turned since the last tick is no longer asked for; a turn past what was asked
     // ends the motion rather than turning back
     if (axis.pending != 0) {
@@ -334,13 +337,59 @@ float MouseCamera::stick_for(Axis &axis, float dt) const {
     return (1.0f + sign * steps) / 127.5f;
 }
 
+float MouseCamera::stick_measured(Axis &axis, const StickResponse &response, float angle, float dt) const {
+    float turned = 0;
+    if (axis.angle) {
+        turned = std::remainder(angle - *axis.angle, 360.0f);
+        if (std::abs(turned) > max_turn_per_tick) {
+            // another view: what was asked no longer applies to it
+            turned = 0;
+            axis.pending = 0;
+        }
+    }
+    axis.angle = angle;
+    // what the camera turned is no longer asked for; a turn past what was asked ends the motion
+    if (axis.pending != 0 && turned != 0) {
+        const float left = axis.pending - turned;
+        axis.pending = left * axis.pending > 0 ? left : 0;
+    }
+    axis.per_tick = axis.held ? 0.7f * axis.per_tick + 0.3f * std::abs(turned) : 0.0f;
+    axis.stalled = axis.held && turned == 0 ? axis.stalled + dt : 0.0f;
+    if (axis.stalled > max_stall)
+        axis.pending = 0;
+    const float limit = response.max_speed() * max_backlog_measured;
+    axis.pending = std::clamp(axis.pending, -limit, limit);
+    // the camera stops as soon as the stick is let go: let go when what is left is less than about
+    // half of what the next tick would turn
+    if (std::abs(axis.pending) < std::max(0.05f, axis.per_tick * 0.5f)) {
+        axis.pending = 0;
+        axis.held = false;
+        axis.stalled = 0;
+        return 0;
+    }
+    axis.held = true;
+    // the least push that turns at full speed, on a whole step from the centre (see stick_for)
+    const float steps = std::ceil(response.push_for(response.max_speed()) * 127.0f - 0.001f);
+    const float sign = axis.pending > 0 ? 1.0f : -1.0f;
+    return (1.0f + sign * steps) / 127.5f;
+}
+
 void MouseCamera::update(EmuEnvState &emuenv, uint64_t now_ns) {
     const float dt = last_ns && now_ns > last_ns ? std::min(static_cast<float>(now_ns - last_ns) / 1e9f, 0.1f) : 0.0f;
     last_ns = now_ns;
-    if (!pushed && axes[0].pending == 0 && axes[1].pending == 0)
+    std::optional<std::array<float, 2>> measured;
+    if (angles)
+        measured = angles(emuenv);
+    if (!pushed && axes[0].pending == 0 && axes[1].pending == 0) {
+        // keep following the camera, so that a motion counts from where it is
+        for (int i = 0; i < 2; i++)
+            axes[i].angle = measured ? std::optional<float>((*measured)[i]) : std::nullopt;
         return;
-    const float x = stick_for(axes[0], dt);
-    const float y = stick_for(axes[1], dt);
+    }
+    if (!measured)
+        axes[0].angle = axes[1].angle = std::nullopt;
+    const float x = measured ? stick_measured(axes[0], responses[0], (*measured)[0], dt) : stick_for(axes[0], responses[0], dt);
+    const float y = measured ? stick_measured(axes[1], responses[1], (*measured)[1], dt) : stick_for(axes[1], responses[1], dt);
     const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
     auto &state = emuenv.ctrl.mouse_state;
     state.axes[2] = x;

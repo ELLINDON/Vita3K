@@ -96,8 +96,13 @@ struct Profile {
         uint32_t button = 0;
         std::string label;
     } screen_latch;
-    // how the game's right stick turns its camera, for the mouse camera ([mouse], layout::mouse)
+    // how the game's right stick turns its camera, for the mouse camera ([mouse], layout::mouse): left
+    // and right (the yaw), and up and down (the pitch) when it differs; empty: as left and right
     StickResponse stick_response;
+    std::optional<StickResponse> stick_response_y;
+    // the camera's angles, for a game whose camera speeds up while the stick is held: the mouse camera
+    // then counts what the camera really turned (MouseCamera::CameraAngles); empty: from the table
+    MouseCamera::CameraAngles camera_angles;
     // Ad Hoc Play: --player 2-4 run more copies with their own Vita user, config and log
     bool multiplayer = false;
     // the executable has an icon resource with id 101 (its .rc); the window then uses it

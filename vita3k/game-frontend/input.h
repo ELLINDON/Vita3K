@@ -23,6 +23,7 @@
 
 #include <input/physical_key.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -80,8 +81,15 @@ struct StickResponse {
 // pushed as far as the game's StickResponse needs to turn what is still asked within about catch_up
 // seconds, and what that push turns until the next tick is counted off, so the camera turns by as
 // much as the mouse moved, at most at the game's fastest turn.
+// A game whose camera speeds up while the stick is held (a pulsed stick then turns far less than its
+// table says) reads its camera's angles instead (CameraAngles): what the camera really turned since
+// the last tick is counted off, and the stick is held at full speed until the rest is less than about
+// half a tick's turn.
 class MouseCamera {
 public:
+    // the camera's yaw and pitch in degrees, as the game holds them (growing with the stick pushed
+    // right and down), or none when there is no camera to read
+    using CameraAngles = std::function<std::optional<std::array<float, 2>>(EmuEnvState &)>;
     struct Options {
         float sensitivity = 1.0f;
         bool invert_y = false;
@@ -90,8 +98,16 @@ public:
     static constexpr float catch_up = 0.035f;
     // at most this many seconds of the fastest turn wait: what a flick asks beyond that is dropped
     static constexpr float max_backlog = 0.25f;
+    // the same with the camera's angles read (a camera that speeds up takes longer to turn a flick)
+    static constexpr float max_backlog_measured = 0.75f;
+    // a measured turn larger than this in one tick is a cut to another view, not the stick's doing
+    static constexpr float max_turn_per_tick = 45.0f;
+    // held this long without the camera turning (a limit, a menu, a scene), what is asked is dropped
+    static constexpr float max_stall = 0.2f;
 
-    void configure(const StickResponse &response, const Options &options);
+    // the yaw's response (x) and the pitch's (y), and the camera's angles when the game reads them
+    void configure(const StickResponse &response_x, const StickResponse &response_y, const Options &options,
+        CameraAngles angles = {});
     // relative motion of the captured mouse, in counts
     void motion(float dx, float dy);
     // each tick: the stick into the controller's mouse state (CtrlState::mouse_state)
@@ -103,9 +119,17 @@ private:
     struct Axis {
         float pending = 0; // degrees still to turn
         float speed = 0; // degrees per second the stick turns at since the last tick (signed)
+        // with the camera's angles read: the angle at the last tick, the degrees a tick it turned
+        // lately, and whether the stick is held
+        std::optional<float> angle;
+        float per_tick = 0;
+        bool held = false;
+        float stalled = 0; // seconds held without a turn
     };
-    float stick_for(Axis &axis, float dt) const;
-    StickResponse response;
+    float stick_for(Axis &axis, const StickResponse &response, float dt) const;
+    float stick_measured(Axis &axis, const StickResponse &response, float angle, float dt) const;
+    StickResponse responses[2];
+    CameraAngles angles;
     Options options;
     Axis axes[2];
     uint64_t last_ns = 0;

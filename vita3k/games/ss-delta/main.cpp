@@ -178,21 +178,26 @@ game_frontend::IniLayout ini_layout() {
                 "In quests, your health is refilled to its maximum as soon as it drops. A hit that takes it\n"
                 "all at once can still bring you down." },
             { "infinite_offerings", Kind::Bool, "false", 0, 0, {},
-                "In quests, offerings don't run out: each is refilled to the uses it started the quest with." },
+                "In quests, offerings don't run out: each cast is given back at once, and one already lost\n"
+                "comes back. How long a cast lasts stays as it is (see Lasting offerings)." },
+            { "long_offerings", Kind::Bool, "false", 0, 0, {},
+                "Offerings whose effect lasts a while (giant arms and weapons, armour, buffs) keep it until\n"
+                "the quest ends instead of fading after their usual time. Counts from the next cast." },
+            { "one_hit_kills", Kind::Bool, "false", 0, 0, {},
+                "In quests, your attacks defeat ordinary enemies in one hit. Bosses take five: the game\n"
+                "limits a hit on a boss to a fifth of its health." },
             { "max_lacrima", Kind::Bool, "false", 0, 0, {}, "Keep Lacrima at 9,999,999." },
             { "max_levels", Kind::Bool, "false", 0, 0, {},
                 "Raise the Life and Magic levels to 99, the highest. Not yet early in the story (the\n"
                 "journal's first chapters, while Portraiture hides the Right Arm's levels)." },
-            { "one_hit_kills", Kind::Bool, "false", 0, 0, {},
-                "In quests, your attacks defeat ordinary enemies in one hit. Bosses take five: the game\n"
-                "limits a hit on a boss to a fifth of its health." },
         } };
     for (auto &spec : cheats.settings)
         spec.live = true;
     cheats.settings[1].title = "Unlimited offerings";
-    cheats.settings[2].title = "Max Lacrima";
-    cheats.settings[3].title = "Max levels";
-    cheats.settings[4].title = "One-hit kills";
+    cheats.settings[2].title = "Lasting offerings";
+    cheats.settings[3].title = "One-hit kills";
+    cheats.settings[4].title = "Max Lacrima";
+    cheats.settings[5].title = "Max levels";
     // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
     // rarely used for several copies on one machine, and with local its rooms never reached the network
 #ifdef _WIN32
@@ -414,9 +419,138 @@ Address skip_intro_logos(EmuEnvState &emuenv, Address done) {
 //     limit), the uses each started the quest with at +0x218 + 4 * slot.
 //   * the save data: *0x81c98618 (the game's own pointer, set from boot). Lacrima at +0x8c, the
 //     Life and Magic levels (u16, 1-99, boot/lowchaos_growth_param.csv) at +0x17ced8 and +0x17ceda.
+//   * how long an offering's effect lasts is data in two of the game's tables, as it holds them from
+//     boot: boot/arms_param.csv for the arms and weapons an offering puts on the right arm (records
+//     of 0x128 bytes: the skill id, the category, the control type, the duration in seconds as a
+//     float at +0xc, the model name at +0x1c; Giant's Arm 70 s), and boot/item_param_ply.csv for the
+//     others (records of 0x6c bytes: the offering id, the duration at +0x40, the skill at +0x5c, the
+//     cast limit at +0x64). Each cast reads them, so a changed duration counts from the next cast. No
+//     pointer leads to them (only a tree of the game's tables), so they are found by their contents.
+struct DurationTable {
+    const char *name;
+    uint32_t stride, field; // record size, the duration's offset from the anchor's start
+    Address anchor = 0; // a known record found in memory, or 0
+};
+
 struct CheatState {
     std::set<std::string> logged; // each cheat logs once per object (player, save data) it changes
+    DurationTable arms{ "arms", 0x128, 0xc };
+    DurationTable items{ "offerings", 0x6c, 0x40 };
+    int table_wait = 0; // ticks until the next search (the game loads its tables after boot)
+    int table_searches = 0;
+    std::map<Address, uint32_t> saved_durations; // durations as the game had them, while changed
 };
+
+constexpr float LASTING_SECONDS = 9999.0f; // longer than any quest (the game's own limit is 60 minutes)
+
+// a word of guest memory, or 0 when it isn't mapped
+uint32_t word_at(MemState &mem, Address a) {
+    return is_valid_addr_range(mem, a, a + 4) ? *Ptr<uint32_t>(a).get(mem) : 0;
+}
+
+float float_at(MemState &mem, Address a) {
+    const uint32_t w = word_at(mem, a);
+    float f;
+    std::memcpy(&f, &w, 4);
+    return f;
+}
+
+bool model_at(MemState &mem, Address a, const char *model) {
+    const size_t n = std::strlen(model) + 1;
+    return is_valid_addr_range(mem, a, a + static_cast<Address>(n)) && std::memcmp(Ptr<char>(a).get(mem), model, n) == 0;
+}
+
+// Giant's Arm and its next rank, as in the game's data: arms (skill 1140000, 60 s, ws140_00; then
+// 1140100, ws140_01) and offerings (102000: skill 1102005, 15 casts; then 102030: 1102035, 6 casts)
+bool arms_anchor(MemState &mem, Address a) {
+    return word_at(mem, a) == 1140000 && model_at(mem, a + 0x1c, "ws140_00") && word_at(mem, a + 0x128) == 1140100 && model_at(mem, a + 0x128 + 0x1c, "ws140_01");
+}
+
+bool items_anchor(MemState &mem, Address a) {
+    return word_at(mem, a) == 102000 && word_at(mem, a + 0x5c) == 1102005 && word_at(mem, a + 0x64) == 15
+        && word_at(mem, a + 0x6c) == 102030 && word_at(mem, a + 0x6c + 0x5c) == 1102035 && word_at(mem, a + 0x6c + 0x64) == 6;
+}
+
+// a record of the table: an arm's has a model name "ws..." and a duration of 0-10000 s; an
+// offering's an id, a cast limit 1-9999 and a skill id 1xxxxxx
+bool is_duration_record(MemState &mem, const DurationTable &table, Address a) {
+    if (!is_valid_addr_range(mem, a, a + table.stride))
+        return false;
+    if (table.field == 0xc) {
+        const float duration = float_at(mem, a + 0xc);
+        return word_at(mem, a) < 3000000 && is_valid_addr_range(mem, a + 0x1c, a + 0x1e) && std::memcmp(Ptr<char>(a + 0x1c).get(mem), "ws", 2) == 0
+            && duration >= 0 && duration <= 10000;
+    }
+    const uint32_t id = word_at(mem, a), skill = word_at(mem, a + 0x5c), casts = word_at(mem, a + 0x64);
+    return id >= 100000 && id < 2000000 && casts >= 1 && casts <= 9999 && skill >= 1000000 && skill < 3000000;
+}
+
+// Both anchors in one pass over the main heap, 4-byte aligned
+void find_duration_tables(MemState &mem, CheatState &state) {
+    constexpr Address START = 0x81000000, END = 0x90000000, PAGE = 0x1000;
+    for (Address page = START; page < END && !(state.arms.anchor && state.items.anchor); page += PAGE) {
+        if (!is_valid_addr(mem, page))
+            continue;
+        const uint32_t *const words = Ptr<uint32_t>(page).get(mem);
+        for (uint32_t i = 0; i < PAGE / 4; i++) {
+            const Address a = page + i * 4;
+            if (!state.arms.anchor && words[i] == 1140000 && arms_anchor(mem, a))
+                state.arms.anchor = a;
+            else if (!state.items.anchor && words[i] == 102000 && items_anchor(mem, a))
+                state.items.anchor = a;
+        }
+    }
+}
+
+// [cheats] long_offerings: every offering's effect with a duration (arms, armour, buffs, summons)
+// lasts 9999 s, past the end of any quest. Each table is walked both ways from its anchor while the
+// records look like its records; the game's durations go back when the cheat is off.
+void apply_offering_durations(EmuEnvState &emuenv, bool on, CheatState &state) {
+    auto &mem = emuenv.mem;
+    if (!on) {
+        for (const auto &[field, value] : state.saved_durations)
+            if (is_valid_addr_range(mem, field, field + 4))
+                std::memcpy(Ptr<uint8_t>(field).get(mem), &value, 4);
+        if (!state.saved_durations.empty())
+            LOG_INFO("cheats: offering durations back as the game has them ({})", state.saved_durations.size());
+        state.saved_durations.clear();
+        return;
+    }
+    if (state.arms.anchor && !arms_anchor(mem, state.arms.anchor))
+        state.arms.anchor = 0;
+    if (state.items.anchor && !items_anchor(mem, state.items.anchor))
+        state.items.anchor = 0;
+    if (!state.arms.anchor || !state.items.anchor) {
+        // searched about every 2 s until found: the tables load a few seconds after boot
+        if (state.table_wait-- > 0)
+            return;
+        state.table_wait = 120;
+        find_duration_tables(mem, state);
+        if (!state.arms.anchor || !state.items.anchor) {
+            if (++state.table_searches == 30)
+                LOG_WARN("cheats: lasting offerings: the {} table isn't found after a minute; waiting for it", !state.arms.anchor ? "arms" : "offerings");
+            return;
+        }
+        LOG_INFO("cheats: duration tables: arms at {:#x}, offerings at {:#x}", state.arms.anchor, state.items.anchor);
+    }
+    for (const DurationTable *table : { &state.arms, &state.items }) {
+        Address first = table->anchor;
+        while (is_duration_record(mem, *table, first - table->stride))
+            first -= table->stride;
+        int changed = 0, records = 0;
+        for (Address a = first; is_duration_record(mem, *table, a); a += table->stride, records++) {
+            const Address field = a + table->field;
+            const float duration = float_at(mem, field);
+            if (!(duration > 0) || duration >= LASTING_SECONDS)
+                continue; // no duration (0), no limit (-1), or already changed
+            state.saved_durations.emplace(field, word_at(mem, field));
+            std::memcpy(Ptr<uint8_t>(field).get(mem), &LASTING_SECONDS, 4);
+            changed++;
+        }
+        if (changed)
+            LOG_INFO("cheats: lasting offerings: {} of {} {} records last {} s from their next cast", changed, records, table->name, LASTING_SECONDS);
+    }
+}
 
 constexpr uint32_t LACRIMA_MAX = 9999999, LEVEL_MAX = 99;
 
@@ -433,6 +567,7 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
     const bool health = values.get_bool("cheats.infinite_health");
     const bool offerings = values.get_bool("cheats.infinite_offerings");
     const bool one_hit = values.get_bool("cheats.one_hit_kills");
+    apply_offering_durations(emuenv, values.get_bool("cheats.long_offerings"), state);
     if (health || offerings || one_hit) {
         const uint32_t *const quest_holder = u32(QUEST_HOLDER);
         const uint32_t *const quest = quest_holder && *quest_holder ? u32(*quest_holder) : nullptr;
@@ -458,7 +593,9 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
                     int32_t left, start;
                     std::memcpy(&left, p + 0x200 + 4 * slot, 4);
                     std::memcpy(&start, p + 0x218 + 4 * slot, 4);
-                    if (left >= 0 && start > 0 && start < 9999 && left < start) {
+                    // -1 with a start: lost (cast at 0 uses, "... was lost"); an empty slot starts at 0.
+                    // Writing the uses back brings a lost offering back (its icon, and it casts again)
+                    if (left >= -1 && start > 0 && start < 9999 && left < start) {
                         std::memcpy(p + 0x200 + 4 * slot, &start, 4);
                         once("unlimited offering uses", player);
                     }

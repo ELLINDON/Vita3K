@@ -473,8 +473,10 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
             std::memcpy(&count, s + 0x8c, 4);
             std::memcpy(&life, s + 0x17ced8, 2);
             std::memcpy(&magic, s + 0x17ceda, 2);
-            // values the game itself could hold, so a wrong pointer is not written through
-            const bool plausible = count <= LACRIMA_MAX && life >= 1 && life <= LEVEL_MAX && magic >= 1 && magic <= LEVEL_MAX;
+            // values the game itself could hold, so a wrong pointer is not written through (at boot,
+            // before a save is loaded, the block holds anything). Levels are 0 until the Right Arm's
+            // levels open, early in the story.
+            const bool plausible = count <= LACRIMA_MAX && life <= LEVEL_MAX && magic <= LEVEL_MAX;
             if (!plausible) {
                 if (state.logged.insert(fmt::format("implausible {:#x}", save)).second)
                     LOG_WARN("cheats: unexpected save data at {:#x} (Lacrima {}, levels {} / {}); left alone", save, count, life, magic);
@@ -483,7 +485,8 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
                     std::memcpy(s + 0x8c, &LACRIMA_MAX, 4);
                     once("max Lacrima", save);
                 }
-                if (levels && (life != LEVEL_MAX || magic != LEVEL_MAX)) {
+                // not before the levels open: the game hasn't shown them yet
+                if (levels && life && magic && (life != LEVEL_MAX || magic != LEVEL_MAX)) {
                     const uint16_t max = LEVEL_MAX;
                     std::memcpy(s + 0x17ced8, &max, 2);
                     std::memcpy(s + 0x17ceda, &max, 2);

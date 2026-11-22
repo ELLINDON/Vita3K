@@ -25,9 +25,15 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
+
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 namespace {
 
@@ -149,9 +155,52 @@ AudioOutPortPtr AudioState::open_port(int nb_channels, int freq, int nb_sample) 
     return port;
 }
 
+// Loudness log for sound tests on devices whose output can't be recorded (a phone): each output
+// port's level over every second, as the game wrote it (before the volume setting), in the log.
+// On with the environment variable VITA3K_AUDIO_LEVELS=1, or on Android the system property
+// debug.vitarecomps.audio_levels=1 (adb shell setprop; read when the game starts).
+static bool audio_levels_enabled() {
+    static const bool enabled = [] {
+#ifdef __ANDROID__
+        char value[PROP_VALUE_MAX] = {};
+        if (__system_property_get("debug.vitarecomps.audio_levels", value) > 0 && value[0] == '1')
+            return true;
+#endif
+        const char *env = std::getenv("VITA3K_AUDIO_LEVELS");
+        return env && env[0] == '1';
+    }();
+    return enabled;
+}
+
+static void log_audio_level(AudioOutPort &port, const void *buffer) {
+    const auto *samples = static_cast<const int16_t *>(buffer);
+    const int count = port.len_bytes / 2;
+    for (int i = 0; i < count; i++) {
+        const int s = samples[i];
+        port.level_squares += double(s) * s;
+        port.level_peak = std::max(port.level_peak, s < 0 ? -s : s);
+    }
+    port.level_samples += count;
+    const uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (port.level_start == 0)
+        port.level_start = now;
+    if (now - port.level_start < 1000)
+        return;
+    const double rms = port.level_samples ? std::sqrt(port.level_squares / port.level_samples) / 32768.0 : 0;
+    LOG_INFO("audio level: port {} ({} Hz, mode {}) rms {:.1f} dB peak {:.1f} dB", fmt::ptr(&port), port.freq, port.mode,
+        20 * std::log10(rms + 1e-9), 20 * std::log10(port.level_peak / 32768.0 + 1e-9));
+    port.level_squares = 0;
+    port.level_peak = 0;
+    port.level_samples = 0;
+    port.level_start = now;
+}
+
 void AudioState::audio_output(AudioOutPort &out_port, const void *buffer) {
     if (out_port.stopping)
         return;
+
+    if (audio_levels_enabled())
+        log_audio_level(out_port, buffer);
 
     adapter->audio_output(out_port, buffer);
 

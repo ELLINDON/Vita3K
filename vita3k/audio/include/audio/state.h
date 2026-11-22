@@ -51,6 +51,12 @@ struct AudioOutPort {
     int len = 0;
     int freq = 0;
     int mode = 0;
+
+    // loudness log (VITA3K_AUDIO_LEVELS): sums over the current second of output
+    double level_squares = 0;
+    int level_peak = 0;
+    uint64_t level_samples = 0;
+    uint64_t level_start = 0;
 };
 
 typedef std::shared_ptr<AudioOutPort> AudioOutPortPtr;

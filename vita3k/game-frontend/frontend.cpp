@@ -75,6 +75,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <fstream>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -108,19 +109,29 @@ void set_env(const char *name, const std::string &value) {
 // The debug switches that are environment variables on PCs (SSD_AOT_DIFF, SSD_AOT_COUNT,
 // VITA3K_AUDIO_LEVELS, ...): an app gets no environment, so on Android they come from the system
 // property debug.vitarecomps.env, NAME=value pairs separated by spaces, set before the game starts
-// (adb shell setprop debug.vitarecomps.env 'SSD_AOT_NATIVE=0 SSD_AOT_DIFF=2000').
-void apply_android_env_property() {
+// (adb shell setprop debug.vitarecomps.env 'SSD_AOT_NATIVE=0 SSD_AOT_DIFF=2000'), and from
+// debug-env.txt in the game's folder (the same pairs, for values past the property's 91
+// characters, such as SSD_AOT_STATS's path). Neither exists unless a tester puts it there.
+void apply_android_env(const fs::path &game_dir) {
+    const auto apply = [](const std::string &text, const char *from) {
+        std::istringstream pairs(text);
+        std::string pair;
+        while (pairs >> pair) {
+            const auto eq = pair.find('=');
+            if (eq == std::string::npos || eq == 0)
+                continue;
+            set_env(pair.substr(0, eq).c_str(), pair.substr(eq + 1));
+            LOG_INFO("{}: {}", from, pair);
+        }
+    };
     char value[PROP_VALUE_MAX] = {};
-    if (__system_property_get("debug.vitarecomps.env", value) <= 0)
-        return;
-    std::istringstream pairs(value);
-    std::string pair;
-    while (pairs >> pair) {
-        const auto eq = pair.find('=');
-        if (eq == std::string::npos || eq == 0)
-            continue;
-        set_env(pair.substr(0, eq).c_str(), pair.substr(eq + 1));
-        LOG_INFO("debug.vitarecomps.env: {}", pair);
+    if (__system_property_get("debug.vitarecomps.env", value) > 0)
+        apply(value, "debug.vitarecomps.env");
+    std::ifstream file((game_dir / "debug-env.txt").string());
+    if (file) {
+        std::stringstream text;
+        text << file.rdbuf();
+        apply(text.str(), "debug-env.txt");
     }
 }
 #endif
@@ -601,7 +612,7 @@ int run(Profile &profile, int argc, char *argv[]) {
 #ifdef __ANDROID__
     // Vulkan driver packages a PC put in drivers/, into the app's internal storage ([debug] gpu_driver)
     android_install_driver_packages(ctx.exe_dir);
-    apply_android_env_property();
+    apply_android_env(ctx.exe_dir);
 #endif
     // --dump-elfs: no recompiled modules, everything on the JIT, as the desktop setup has always run it
     // (install-game.py's environment). SSD_AOT also makes fiber switches go through SceFiber's HLE

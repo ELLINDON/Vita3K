@@ -69,6 +69,15 @@
 			android:exported="false"
 			android:foregroundServiceType="dataSync" />
 
+		<!-- "Import a Vita save" (the launcher's long-press menu): a picked save, through the game's
+		     import-save option, run as a front-end step -->
+		<activity
+			android:name="io.github.vitarecomps.frontend.SaveImportActivity"
+			android:exported="false"
+			android:screenOrientation="sensorLandscape"
+			android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+			android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
+
 		<!-- the front end's setup steps (install the firmware and the game, dump the modules), each in a
 		     process of its own that ends with it (FrontendStepActivity) -->
 		<activity

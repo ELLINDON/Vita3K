@@ -78,6 +78,12 @@ public class SetupActivity extends Activity {
             finish();
             return;
         }
+        // "Import a Vita save": a picked save, through the game's --import-save (once the game is built)
+        if (ACTION_IMPORT_SAVE.equals(getIntent() != null ? getIntent().getAction() : null) && !BuildActivity.needsSetup(this)) {
+            startActivity(new Intent(this, SaveImportActivity.class));
+            finish();
+            return;
+        }
         // not built on this device yet, or built by an older version of the app: the setup first
         if (BuildActivity.needsSetup(this)) {
             startActivity(new Intent(this, BuildActivity.class));
@@ -130,9 +136,11 @@ public class SetupActivity extends Activity {
     }
 
     static final String ACTION_ADD_ADDON = "io.github.vitarecomps.frontend.ADD_ADDON";
+    static final String ACTION_IMPORT_SAVE = "io.github.vitarecomps.frontend.IMPORT_SAVE";
 
-    // "Add an add-on" on the launcher's long-press menu: the only way back to the setup screen once the
-    // game is built, since the icon starts the game straight away
+    // "Add an add-on" and "Import a Vita save" on the launcher's long-press menu: the only ways back to
+    // the setup screen and into the game's folder once the game is built, since the icon starts the game
+    // straight away and Android keeps file managers out of an app's folder
     private void publishShortcuts() {
         try {
             android.content.pm.ShortcutManager shortcuts = getSystemService(android.content.pm.ShortcutManager.class);
@@ -146,7 +154,15 @@ public class SetupActivity extends Activity {
                 .setIcon(android.graphics.drawable.Icon.createWithResource("android", android.R.drawable.ic_input_add))
                 .setIntent(intent)
                 .build();
-            shortcuts.setDynamicShortcuts(java.util.Collections.singletonList(addon));
+            Intent importIntent = new Intent(this, SetupActivity.class).setAction(ACTION_IMPORT_SAVE)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+            android.content.pm.ShortcutInfo importSave = new android.content.pm.ShortcutInfo.Builder(this, "import_save")
+                .setShortLabel("Import a Vita save")
+                .setLongLabel("Import a Vita save")
+                .setIcon(android.graphics.drawable.Icon.createWithResource("android", android.R.drawable.ic_menu_save))
+                .setIntent(importIntent)
+                .build();
+            shortcuts.setDynamicShortcuts(java.util.Arrays.asList(addon, importSave));
         } catch (Exception e) {
             Log.w(TAG, "shortcuts", e);
         }

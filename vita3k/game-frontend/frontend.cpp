@@ -767,6 +767,9 @@ int run(Profile &profile, int argc, char *argv[]) {
         return 1;
     }
 
+    if (profile.hooks.before_mods)
+        profile.hooks.before_mods(ctx, settings.values.get_bool("game.repatch"));
+
     // [game] repatch (layout::repatch; false in a game without it): mods in ux0/rePatch/<title ID>/,
     // before the game's hook, which may serve copies of the game's files made from them
     if (settings.values.get_bool("game.repatch"))

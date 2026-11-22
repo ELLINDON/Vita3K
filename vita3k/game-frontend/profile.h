@@ -68,6 +68,9 @@ struct Hooks {
     std::function<std::optional<int>(Context &)> before_init;
     // the emulator's config, after the frontend's own defaults
     std::function<void(Context &, Config &)> configure;
+    // once the game is known to be installed, before the rePatch mods are read: a game may install or
+    // remove packaged mods of its own here (packaged_mods.h); `repatch` is [game] repatch
+    std::function<void(Context &, bool repatch)> before_mods;
     // once the game is known to be installed, before it starts (add-ons, the game's files, GXM)
     std::function<void(Context &)> before_run;
     // every frame of the frontend's loop

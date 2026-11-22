@@ -34,11 +34,18 @@ bool addon_data_present(const fs::path &app_dir, std::string &why);
 
 // The add-ons that PSN handed out as gifts on Cassus's Claim Gift page (Soulbinder, the Necky
 // raiment, the hoods ...), given as that page would, in the loaded save (GitHub issue #11); with
-// `japan`, also the raiments only Japan had (Sylvan, Benkei).
+// `japan`, also the raiments only Japan had (Sylvan, Benkei). With the mods that add them, the
+// original game's two raiments and its pre-order Spirits' offerings too.
 struct GiftState {
     int wait = 0; // ticks until the save is looked at again
     std::set<std::string> logged;
 };
+// [game] spirits_offerings: the original game's pre-order Spirits' offerings, which Delta keeps
+// commented out in its tables, switched on (`on`) or off again with a packaged mod made from the
+// installed game (title_id) in ux0/rePatch/; work_dir holds the package while it is made. Called
+// before the rePatch mods are read.
+void sync_spirits_offerings(const fs::path &vita_fs, const std::string &title_id, bool on, const fs::path &work_dir);
+
 // Called every tick while [game] dlc is on.
 void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan);
 

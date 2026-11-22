@@ -167,6 +167,13 @@ game_frontend::IniLayout ini_layout() {
         "With dlc, also give the raiments only Japan had: Sylvan (a gift there) and Benkei. Both are\n"
         "in the game's data; they stay in the save once it is written." });
     game.settings.back().title = "Japan-only raiments";
+    // D29 in ss-delta: the original game's pre-order offerings, kept commented out in Delta's tables
+    game.settings.push_back({ "spirits_offerings", Kind::Bool, "true", 0, 0, {},
+        "With dlc, also give the original Soul Sacrifice's 20 pre-order offerings (Spirits' Flamepike ...\n"
+        "Spirits' Gravelshield), once a save. Delta still has them, switched off: ss-delta switches them\n"
+        "on in a copy of the game's patch archive in ux0/rePatch/ (Mods (rePatch) must be on). Applies at\n"
+        "the next start; off takes them out of the game again." });
+    game.settings.back().title = "Original's Spirits' offerings";
     game.settings.push_back({ "skip_intro", Kind::Bool, "false", 0, 0, {},
         "Skip the health warning and the company logos at start: the game opens on its title screen." });
     game.settings.back().title = "Skip intro logos";
@@ -937,6 +944,19 @@ int main(int argc, char *argv[]) {
         // the background
         if (values.get_int("multiplayer.gamepad") > 0)
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    };
+    // [game] spirits_offerings (D29 in ss-delta): their packaged mod made, or taken out, before the
+    // rePatch mods are read; by player 1 only (Ad Hoc Play's copies share the file system)
+    hooks.before_mods = [&](game_frontend::Context &ctx, bool repatch) {
+        const auto &values = ctx.settings->values;
+        const bool on = values.get_bool("game.dlc") && values.get_bool("game.spirits_offerings");
+        if (ctx.player > 1)
+            return;
+        if (on && !repatch) {
+            LOG_WARN("Spirits' offerings: not shown, Mods (rePatch) is off ([game] repatch = false)");
+            return;
+        }
+        ss_delta::sync_spirits_offerings(ctx.emuenv->vita_fs_path, profile.title_id, on, ctx.data_dir);
     };
     hooks.before_run = [&](game_frontend::Context &ctx) {
         EmuEnvState &emuenv = *ctx.emuenv;

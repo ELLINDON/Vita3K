@@ -17,11 +17,14 @@
 
 #include "dlc.h"
 
+#include "../../game-frontend/packaged_mods.h"
+
 #include <emuenv/state.h>
 #include <mem/functions.h>
 #include <mem/ptr.h>
 #include <mem/state.h>
 #include <util/log.h>
+#include <util/string_utils.h>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -31,7 +34,10 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <optional>
+#include <regex>
+#include <set>
 #include <vector>
 
 namespace ss_delta {
@@ -121,6 +127,241 @@ std::optional<std::vector<std::string>> read_lines(const fs::path &app_dir, cons
 
 } // namespace
 
+// The original game's pre-order "Spirits'" offerings (ss-delta docs/decisions.md D29). Delta keeps
+// every row they need commented out (a ';' before the row) in its own tables; [game]
+// spirits_offerings switches them on with a packaged mod made here from the installed game's own
+// archives (nothing of the original game is needed): those rows appended without the ';', with
+//   * the two fang arms' punch-effect skill (1601001, 1601101), which Delta removed, set to 0, as on
+//     Delta's own fang arms;
+//   * the falcon columns of arms rows that have 0 there taken from Delta's arm of the same model, as
+//     the Spirit swords already have them;
+//   * Spirits' Falconfeather (601800), "test" in Delta's western item text, named as in the original.
+// grant_addon_gifts then gives each offering once a save.
+namespace {
+
+constexpr const char *SPIRITS_ID = "spirits-offerings";
+constexpr const char *SPIRITS_VERSION = "1";
+constexpr const char *SPIRITS_ARCHIVE = "resource/data/pack/mount/retail/archive_patch3";
+
+struct SpiritTable {
+    const char *member;
+    const char *pattern; // the rows, after the ';'
+    size_t rows; // in Delta 1.30
+};
+constexpr std::array<SpiritTable, 9> SPIRIT_TABLES{ {
+    { "resource/boot/item_param_ply.csv", "60[01][0-9]00,", 20 },
+    { "resource/boot/skill_param_ply.csv", "160[01][0-9]{3},", 49 },
+    { "resource/boot/magic_eff_pack_param_ply.csv", "160[01][0-9]{3},", 49 },
+    { "resource/boot/magic_explode_param_ply.csv", "160[01][0-9]{3},", 44 },
+    { "resource/boot/magic_gimmick_param_ply.csv", "160[01][0-9]{3},", 12 },
+    { "resource/boot/magic_bullet_param_ply.csv", "160[01][0-9]{3},", 5 },
+    { "resource/boot/magic_crawl_param_ply.csv", "160[01][0-9]{3},", 6 },
+    { "resource/boot/arms_param.csv", "ws160[01][0-9]{3},", 6 },
+    { "resource/boot/protector_param.csv", "pa160[01][0-9]{3},", 2 },
+} };
+// arms_param.csv columns: model, falcon motion, falcon pierce skill, derived skills (normal, greed)
+constexpr size_t ARMS_MODEL = 3, ARMS_FALCON_MOTION = 8, ARMS_PIERCE = 16, ARMS_DERIVED_NORMAL = 17, ARMS_DERIVED_GREED = 18;
+// the original's names of Spirits' Falconfeather in the western languages (Delta's say "test")
+constexpr uint32_t FALCONFEATHER = 601800;
+const std::array<std::pair<const char *, const char *>, 7> FALCONFEATHER_NAMES{ {
+    { "us", "Spirits' Falconfeather" },
+    { "ue", "Spirits' Falconfeather" },
+    { "fr", "Don : Plume de faucon" },
+    { "ge", "Geist-Falkenfeder" },
+    { "it", "Piuma falco spettrale" },
+    { "sp", "Pluma halc\xc3\xb3n esp\xc3\xadritu" },
+    { "bp", "Pena de Esp\xc3\xadritos" },
+} };
+
+std::vector<std::string> split(const std::string &s, char sep) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    for (size_t i = 0; i <= s.size(); i++)
+        if (i == s.size() || s[i] == sep) {
+            out.push_back(s.substr(start, i - start));
+            start = i + 1;
+        }
+    return out;
+}
+
+std::string join(const std::vector<std::string> &v, char sep) {
+    std::string out;
+    for (size_t i = 0; i < v.size(); i++) {
+        if (i)
+            out += sep;
+        out += v[i];
+    }
+    return out;
+}
+
+void fix_arms(std::vector<std::string> &rows, const std::vector<std::string> &table) {
+    std::map<std::string, std::vector<std::string>> by_model;
+    for (const auto &l : table) {
+        if (!l.starts_with("ws"))
+            continue;
+        auto c = split(l, ',');
+        if (c.size() > ARMS_DERIVED_GREED && !c[ARMS_FALCON_MOTION].empty() && c[ARMS_FALCON_MOTION] != "0")
+            by_model.try_emplace(c[ARMS_MODEL], c);
+    }
+    for (auto &row : rows) {
+        auto c = split(row, ',');
+        if (c.size() <= ARMS_DERIVED_GREED)
+            continue;
+        for (const size_t col : { ARMS_DERIVED_NORMAL, ARMS_DERIVED_GREED })
+            if (c[col] == "1601001" || c[col] == "1601101")
+                c[col] = "0";
+        const auto own = by_model.find(c[ARMS_MODEL]);
+        if (own != by_model.end() && (c[ARMS_FALCON_MOTION].empty() || c[ARMS_FALCON_MOTION] == "0")) {
+            c[ARMS_FALCON_MOTION] = own->second[ARMS_FALCON_MOTION];
+            if (c[ARMS_PIERCE].empty() || c[ARMS_PIERCE] == "0")
+                c[ARMS_PIERCE] = own->second[ARMS_PIERCE];
+        }
+        row = join(c, ',');
+    }
+}
+
+// an item text table (UTF-16 LE with a BOM, tab-separated, CRLF) with one item's name replaced;
+// nullopt when it has no line for the item or already has that name
+std::optional<std::vector<uint8_t>> renamed(const std::vector<uint8_t> &data, uint32_t item, const std::string &name) {
+    if (data.size() < 2 || data.size() % 2)
+        return std::nullopt;
+    std::u16string text(data.size() / 2, u'\0');
+    std::memcpy(text.data(), data.data(), data.size());
+    const std::u16string key = string_utils::utf8_to_utf16(std::to_string(item) + "\t");
+    const std::u16string want = string_utils::utf8_to_utf16(name);
+    bool changed = false;
+    for (size_t pos = 0; pos < text.size();) {
+        size_t end = text.find(u"\r\n", pos);
+        if (end == std::u16string::npos)
+            end = text.size();
+        const size_t start = text[pos] == u'﻿' ? pos + 1 : pos;
+        if (text.compare(start, key.size(), key) == 0) {
+            const size_t from = start + key.size();
+            size_t to = text.find(u'\t', from);
+            if (to == std::u16string::npos || to > end)
+                to = end;
+            if (text.compare(from, to - from, want) != 0) {
+                text.replace(from, to - from, want);
+                end = end + want.size() - (to - from);
+                changed = true;
+            }
+        }
+        pos = end + 2;
+    }
+    if (!changed)
+        return std::nullopt;
+    std::vector<uint8_t> out(text.size() * 2);
+    std::memcpy(out.data(), text.data(), out.size());
+    return out;
+}
+
+bool write_bytes(const fs::path &path, const std::string &data) {
+    boost::system::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    fs::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    return static_cast<bool>(out);
+}
+
+// the package (packaged_mods.h) in `dir`, made from the installed game's archives; false (and why)
+// when they don't hold the commented-out rows Delta 1.30 has
+bool make_spirits_package(const fs::path &app_dir, const fs::path &dir, std::string &why) {
+    std::string appends;
+    for (const auto &t : SPIRIT_TABLES) {
+        const auto table = read_lines(app_dir, t.member);
+        if (!table) {
+            why = std::string(t.member) + " not found in the game's archives";
+            return false;
+        }
+        const std::regex row(std::string("^") + t.pattern);
+        std::vector<std::string> rows;
+        for (const auto &l : *table) {
+            if (std::regex_search(l, row)) {
+                why = std::string(t.member) + " has them switched on already";
+                return false;
+            }
+            if (l.size() > 1 && l[0] == ';' && std::regex_search(l.substr(1), row))
+                rows.push_back(l.substr(1));
+        }
+        if (rows.size() != t.rows) {
+            why = fmt::format("{} has {} of the commented-out rows, not the {} of Delta 1.30", t.member, rows.size(), t.rows);
+            return false;
+        }
+        const std::string member = t.member;
+        const std::string name = member.substr(member.rfind('/') + 1);
+        if (name == "arms_param.csv")
+            fix_arms(rows, *table);
+        std::string lines, conflicts;
+        std::set<std::string> ids;
+        for (const auto &r : rows) {
+            lines += r + "\r\n";
+            ids.insert(r.substr(0, r.find(',') + 1));
+        }
+        for (const auto &id : ids)
+            conflicts += fmt::format("{}\"{}\"", conflicts.empty() ? "" : ", ", id);
+        if (!write_bytes(dir / "tables" / name, lines)) {
+            why = "could not write " + (dir / "tables" / name).string();
+            return false;
+        }
+        appends += fmt::format("{}\n  {{\"member\": \"{}\", \"lines\": \"tables/{}\", \"conflicts\": [{}]}}",
+            appends.empty() ? "" : ",", member, name, conflicts);
+    }
+    const fs::path retail = app_dir / "resource" / "data" / "pack" / "mount" / "retail";
+    for (const auto &[lang, name] : FALCONFEATHER_NAMES) {
+        const std::string member = fmt::format("resource/boot/{0}/item_param_text_{0}.msgt", lang);
+        std::optional<std::vector<uint8_t>> data;
+        for (const char *archive : { "archive_patch3", "archive" })
+            if ((data = read_member(retail / archive, member)))
+                break;
+        if (!data)
+            continue;
+        if (const auto fixed = renamed(*data, FALCONFEATHER, name))
+            if (!write_bytes(dir / "files" / fs_utils::utf8_to_path(member), std::string(fixed->begin(), fixed->end()))) {
+                why = "could not write " + member;
+                return false;
+            }
+    }
+    const std::string manifest = fmt::format(
+        "{{\n \"ss-delta-mod\": 1,\n \"id\": \"{}\",\n \"name\": \"The original Soul Sacrifice's Spirits' offerings\",\n"
+        " \"version\": \"{}\",\n \"titles\": [\"PCSA00152\", \"PCSF00532\"],\n \"archive\": \"{}\",\n"
+        " \"tables_from\": [\"resource/data/pack/mount/retail/archive\"],\n \"append\": [{}\n ],\n"
+        " \"remove_note\": \"Without the mod the game doesn't show the Spirits' offerings, and drops them from the save when it next saves.\"\n}}\n",
+        SPIRITS_ID, SPIRITS_VERSION, SPIRITS_ARCHIVE, appends);
+    if (!write_bytes(dir / "ss-delta-mod.json", manifest)) {
+        why = "could not write the manifest";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+void sync_spirits_offerings(const fs::path &vita_fs, const std::string &title_id, bool on, const fs::path &work_dir) {
+    const fs::path installed = vita_fs / "ux0" / "rePatch" / title_id / game_frontend::PACKAGED_MODS_DIR / SPIRITS_ID;
+    const auto manifest = fs::exists(installed / "ss-delta-mod.json") ? read_all(installed / "ss-delta-mod.json") : std::vector<uint8_t>{};
+    const std::string current(manifest.begin(), manifest.end());
+    if (!on) {
+        if (!current.empty() && game_frontend::remove_packaged_mod(vita_fs, SPIRITS_ID, { title_id }))
+            LOG_INFO("Spirits' offerings: switched off again ([game] spirits_offerings = false)");
+        return;
+    }
+    if (current.find(fmt::format("\"version\": \"{}\"", SPIRITS_VERSION)) != std::string::npos)
+        return; // installed, this version
+    const fs::path dir = work_dir / (std::string(SPIRITS_ID) + ".new");
+    boost::system::error_code ec;
+    fs::remove_all(dir, ec);
+    std::string why;
+    if (!make_spirits_package(vita_fs / "ux0" / "app" / title_id, dir, why))
+        LOG_WARN("Spirits' offerings: not switched on, {}", why);
+    else if (game_frontend::install_packaged_mod(vita_fs, dir, { title_id }).value_or(false))
+        LOG_INFO("Spirits' offerings: switched on (the game's own commented-out rows, merged into ux0/rePatch/{}); "
+                 "with dlc, each is given once a save",
+            title_id);
+    else
+        LOG_ERROR("Spirits' offerings: the packaged mod could not be installed (see above)");
+    fs::remove_all(dir, ec);
+}
+
 bool addon_data_present(const fs::path &app_dir, std::string &why) {
     // the add-on pacts are quest_param.csv rows up to 580, the raiments costume_table.csv rows up
     // to 130 (saves.cpp ADDON_LISTS)
@@ -163,13 +404,22 @@ bool addon_data_present(const fs::path &app_dir, std::string &why) {
 //   * sigils (STAMP_nn, a stamp id): a byte at image + 0x84 + 0x564dc + its index in the stamp
 //     table (*0x81c9a3e4, records of 0xb4 bytes with the id at +0x4, *0x81d329b0 of them); bits 0,
 //     1 and 2 set (0x81780708, 0x8178072a, 0x81780768).
+//   * offerings (the original game's pre-order "Spirits'" offerings, items 600000-601900, which
+//     Delta keeps commented out in its tables; ss-delta tools/spirits-offerings.py switches them on,
+//     D29): the block's offering stock, built from the item tables when the save is applied, is a
+//     count at +0x84 and entries of 0x2c bytes from +0x88 (the item id, four counts, one per star
+//     rank, from +0x4, four flag words from +0x14: bit 1 obtained, bit 0 new). An offering box's
+//     gift (0x816b05ca) calls 0x812f6ece(block, id, 0, 1): one more of rank 0 (at most 99) and the
+//     obtained bit. The game writes the stock into the image when it saves (only ids it has rows
+//     for: the image keeps none of them before), so only the block is set.
 // Each add-on is given if it isn't received or isn't owned, so a save loaded later, or the
 // defaults the image holds before one is, get them too. Owned items are left alone.
 namespace {
 
 enum class GiftKind { Raiment,
     Hood,
-    Sigil };
+    Sigil,
+    Offering };
 
 struct Gift {
     int row; // entitlement table row (index of its received byte), -1 for none
@@ -185,8 +435,11 @@ struct Gift {
 // Sylvan (SSC018 and SSC020, marked never distributed in the other regions' tables) and Benkei, in
 // no box (costume_table.csv row 168, its colour A as for its sibling Necky, 180), then the original
 // game's collaboration raiments, rows the "original raiments" mod adds (ss-delta tools/og-raiments.py,
-// D28), given when the game's costume table has them, colour A as in the original
-constexpr std::array<Gift, 23> GIFTS{ {
+// D28), given when the game's costume table has them, colour A as in the original; then the
+// original game's pre-order offerings (D29), given when the game's item tables have them (the
+// "Spirits' offerings" mod), once a save: the obtained bit stays when the offering is used up
+// or carried (its count 0)
+constexpr std::array<Gift, 43> GIFTS{ {
     { 0, "COSTUME_01 Soulbinder", GiftKind::Raiment, 156, 13 },
     { 1, "PARTS_01 Fox Hood", GiftKind::Hood, 104, 1 },
     { 2, "STAMP_01 Fox Sigil", GiftKind::Sigil, 7101900, 1 },
@@ -210,6 +463,26 @@ constexpr std::array<Gift, 23> GIFTS{ {
     { -1, "Benkei", GiftKind::Raiment, 168, 1, true },
     { -1, "ARKS Armor (the original's)", GiftKind::Raiment, 720, 1, false, 3954 },
     { -1, "Dragonslayer (the original's)", GiftKind::Raiment, 732, 1, false, 3956 },
+    { -1, "Spirits' Flamepike", GiftKind::Offering, 600000, 1 },
+    { -1, "Spirits' Icebrand", GiftKind::Offering, 600100, 1 },
+    { -1, "Spirits' Firearm", GiftKind::Offering, 600200, 1 },
+    { -1, "Spirits' Stormfist", GiftKind::Offering, 600300, 1 },
+    { -1, "Spirits' Flame Arrow", GiftKind::Offering, 600400, 1 },
+    { -1, "Spirits' Stone Arrow", GiftKind::Offering, 600500, 1 },
+    { -1, "Spirits' Blazestone", GiftKind::Offering, 600600, 1 },
+    { -1, "Spirits' Blightstone", GiftKind::Offering, 600700, 1 },
+    { -1, "Spirits' Greatroot", GiftKind::Offering, 600800, 1 },
+    { -1, "Spirits' Sparktree", GiftKind::Offering, 600900, 1 },
+    { -1, "Spirits' Dragon fang", GiftKind::Offering, 601000, 1 },
+    { -1, "Spirits' Wolf fang", GiftKind::Offering, 601100, 1 },
+    { -1, "Spirits' Heart", GiftKind::Offering, 601200, 1 },
+    { -1, "Spirits' Flamebulb", GiftKind::Offering, 601300, 1 },
+    { -1, "Spirits' Frostfluff", GiftKind::Offering, 601400, 1 },
+    { -1, "Spirits' Storm Pinion", GiftKind::Offering, 601500, 1 },
+    { -1, "Spirits' Storm Ward", GiftKind::Offering, 601600, 1 },
+    { -1, "Spirits' Halebloom", GiftKind::Offering, 601700, 1 },
+    { -1, "Spirits' Falconfeather", GiftKind::Offering, 601800, 1 },
+    { -1, "Spirits' Gravelshield", GiftKind::Offering, 601900, 1 },
 } };
 
 constexpr Address SAVE_BLOCK_HOLDER = 0x81c98618, SAVE_IMAGE_HOLDER = 0x81c9a160;
@@ -223,6 +496,9 @@ constexpr uint32_t IMAGE_HOODS = 0x568dc, IMAGE_SIGILS = 0x564dc;
 constexpr uint32_t BLOCK_COSTUME_COUNT = 0x6ab24, BLOCK_COSTUMES = 0x6ab28, BLOCK_COSTUME_SIZE = 0x2c, BLOCK_COSTUME_STATE = 0x14;
 constexpr uint32_t COSTUME_RECORD = 0x5c, STAMP_RECORD = 0xb4;
 constexpr uint32_t STATE_HIDDEN = 0, STATE_NEW = 1, STATE_SHOWN = 4;
+constexpr uint32_t BLOCK_OFFERING_COUNT = 0x84, BLOCK_OFFERINGS = 0x88, BLOCK_OFFERING_SIZE = 0x2c;
+constexpr uint32_t OFFERING_RANK0_COUNT = 0x4, OFFERING_RANK0_FLAGS = 0x14, OFFERINGS_MAX = 0x2000;
+constexpr uint32_t OFFERING_NEW = 1, OFFERING_OBTAINED = 2, OFFERING_MOST = 99;
 constexpr uint32_t GAME_ROWS = 720; // costume_table.csv rows of 1.30; a mod may add more (up to 0x300)
 constexpr uint32_t EMPTY_RECORD = 0xffffffff; // the image's raiment records past the table's rows
 // the raiments worn, top and bottom (u16 costume rows), in three records of the image (found with the
@@ -357,6 +633,27 @@ public:
         return nullptr;
     }
 
+    // an offering's entry in the block's stock (0 when the block isn't there or lacks the id)
+    Address offering(uint32_t id) const {
+        if (!block)
+            return 0;
+        const uint32_t count = read<uint32_t>(block + BLOCK_OFFERING_COUNT);
+        if (count == 0 || count > OFFERINGS_MAX || !valid(block, block + BLOCK_OFFERINGS + count * BLOCK_OFFERING_SIZE))
+            return 0;
+        for (uint32_t i = 0; i < count; i++) {
+            const Address entry = block + BLOCK_OFFERINGS + i * BLOCK_OFFERING_SIZE;
+            if (read<uint32_t>(entry) == id)
+                return entry;
+        }
+        return 0;
+    }
+    bool offering_obtained(Address entry) const { return read<uint32_t>(entry + OFFERING_RANK0_FLAGS) & OFFERING_OBTAINED; }
+    // 0x812f3c30 with one of rank 0, marked new
+    void give_offering(Address entry) {
+        write<uint32_t>(entry + OFFERING_RANK0_COUNT, std::min(read<uint32_t>(entry + OFFERING_RANK0_COUNT) + 1, OFFERING_MOST));
+        write<uint32_t>(entry + OFFERING_RANK0_FLAGS, read<uint32_t>(entry + OFFERING_RANK0_FLAGS) | OFFERING_OBTAINED | OFFERING_NEW);
+    }
+
     Address image = 0, block = 0;
 
 private:
@@ -399,6 +696,9 @@ void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan) {
             continue;
         if (gift.text && save.raiment_text(gift.id) != gift.text)
             continue; // the mod isn't installed
+        const Address offering = gift.kind == GiftKind::Offering ? save.offering(gift.id) : 0;
+        if (gift.kind == GiftKind::Offering && !offering)
+            continue; // the mod isn't installed, or the block doesn't hold the save yet
         bool owned = false, done = false;
         switch (gift.kind) {
         case GiftKind::Raiment: {
@@ -429,6 +729,13 @@ void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan) {
                 }
             }
             break;
+        case GiftKind::Offering:
+            owned = save.offering_obtained(offering);
+            if (!owned) {
+                save.give_offering(offering);
+                owned = done = true;
+            }
+            break;
         }
         if (!owned) {
             missing.push_back(gift.box);
@@ -442,7 +749,7 @@ void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan) {
             given.push_back(gift.box);
     }
     if (!given.empty())
-        LOG_INFO("Add-ons: gave the PSN gifts {} in the save ({:#x}{})", fmt::join(given, ", "), save.image,
+        LOG_INFO("Add-ons: gave {} in the save ({:#x}{})", fmt::join(given, ", "), save.image,
             save.block ? "" : ", the play block not yet holding it");
     if (!missing.empty() && state.logged.insert(fmt::format("{:#x} {}", save.image, fmt::join(missing, ","))).second)
         LOG_WARN("Add-ons: could not give {} (not where the save should have it)", fmt::join(missing, ", "));

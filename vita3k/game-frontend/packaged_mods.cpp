@@ -476,7 +476,23 @@ bool rebuild(const fs::path &vita_fs, const std::string &title, const std::strin
                 text = append_lines(text, a.lines);
                 appended = true;
             }
-        if (appended || in_base)
+        // a table the archive got from tables_from (the game's own lacks it), with no rows of a
+        // kept mod left: dropped again when it is the source's (the game then reads that)
+        bool from_source = false;
+        if (!appended && in_base && !own_index->contains(h))
+            for (const Mod *mod : all) {
+                for (const auto &from : mod->tables_from) {
+                    const fs::path other = app / fs_utils::utf8_to_path(from);
+                    const auto other_index = read_index(other);
+                    if (const auto source = other_index ? read_member(other, *other_index, member) : std::nullopt) {
+                        from_source = std::string(source->begin(), source->end()) == text;
+                        break;
+                    }
+                }
+                if (from_source)
+                    break;
+            }
+        if ((appended || in_base) && !from_source)
             put[h] = Bytes(text.begin(), text.end());
         else
             drop.insert(h);

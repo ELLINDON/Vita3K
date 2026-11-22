@@ -165,8 +165,11 @@ public:
 
     // Recompiled code (cpu/aot.h): a block that reaches the entry of a native function, or the
     // sentinel native code's calls into the JIT return to, ends there and stops the JIT with
-    // UserDefined7; DynarmicCPU::aot_boundary takes over.
-    static void AotBoundary(uint64_t cpu_) {
+    // UserDefined7; DynarmicCPU::aot_boundary takes over. Host calls here always pass three
+    // arguments: dynarmic's arm64 backend asserts on the empty ones of the shorter forms
+    // (RegAlloc::PrepareForCall loads them as immediates), which stopped the JIT with native code
+    // on Android at the first boundary; x64 skips them.
+    static void AotBoundary(uint64_t cpu_, uint64_t, uint64_t) {
         reinterpret_cast<DynarmicCPU *>(cpu_)->jit->HaltExecution(Dynarmic::HaltReason::UserDefined7);
     }
 
@@ -177,7 +180,7 @@ public:
         if (pc != aot_sentinel() && !aot_lookup(entry) && !aot_lookup_resume(entry))
             return true;
         ir.BranchWritePC(ir.Imm32(pc));
-        ir.CallHostFunction(&AotBoundary, ir.Imm64(reinterpret_cast<uint64_t>(cpu)));
+        ir.CallHostFunction(&AotBoundary, ir.Imm64(reinterpret_cast<uint64_t>(cpu)), ir.Imm64(0), ir.Imm64(0));
         ir.SetTerm(Dynarmic::IR::Term::CheckHalt{ Dynarmic::IR::Term::ReturnToDispatch{} });
         return false;
     }
@@ -476,7 +479,7 @@ struct AotShadow final : Dynarmic::A32::UserCallbacks {
     void AddTicks(uint64_t t) override { ticks_left = t > ticks_left ? 0 : ticks_left - t; }
     uint64_t GetTicksRemaining() override { return ticks_left; }
 
-    static void Returned(uint64_t self_) {
+    static void Returned(uint64_t self_, uint64_t, uint64_t) { // three arguments: see AotBoundary
         AotShadow &self = *reinterpret_cast<AotShadow *>(self_);
         self.returned = true;
         self.jit->HaltExecution();
@@ -485,7 +488,7 @@ struct AotShadow final : Dynarmic::A32::UserCallbacks {
         if (pc != aot_sentinel())
             return true;
         ir.BranchWritePC(ir.Imm32(pc));
-        ir.CallHostFunction(&Returned, ir.Imm64(reinterpret_cast<uint64_t>(this)));
+        ir.CallHostFunction(&Returned, ir.Imm64(reinterpret_cast<uint64_t>(this)), ir.Imm64(0), ir.Imm64(0));
         ir.SetTerm(Dynarmic::IR::Term::CheckHalt{ Dynarmic::IR::Term::ReturnToDispatch{} });
         return false;
     }

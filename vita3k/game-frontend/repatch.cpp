@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include "repatch.h"
+#include "packaged_mods.h"
 
 #include <emuenv/state.h>
 #include <io/functions.h>
@@ -203,9 +204,16 @@ int apply_repatch(EmuEnvState &emuenv, const std::string &title_id) {
     const fs::path app = emuenv.vita_fs_path / "ux0" / "app" / title_id;
     if (!fs::is_directory(root))
         return 0;
+    // packaged mods (packaged_mods.h) merged again where another mod replaced their archive
+    refresh_packaged_mods(emuenv.vita_fs_path, title_id);
     int served = 0, skipped = 0;
     boost::system::error_code ec;
     for (fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+        // the packages themselves, kept for merging again, aren't the game's files
+        if (it.depth() == 0 && fs::is_directory(it->path()) && it->path().filename() == PACKAGED_MODS_DIR) {
+            it.disable_recursion_pending();
+            continue;
+        }
         if (!fs::is_regular_file(it->path()))
             continue;
         const fs::path rel = it->path().lexically_relative(root);

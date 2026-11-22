@@ -483,9 +483,10 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR ANDROID)
 		game-frontend/settings_menu.cpp game-frontend/settings_menu.h
 		game-frontend/button_labels.cpp game-frontend/button_labels.h
 		game-frontend/repatch.cpp game-frontend/repatch.h
+		game-frontend/packaged_mods.cpp game-frontend/packaged_mods.h
 		game-frontend/importer.cpp game-frontend/importer_apple.cpp game-frontend/importer.h
 		interface.cpp interface.h)
-	target_link_libraries(game-frontend PUBLIC app audio compat config ctrl dialog display ime lang gdbstub gxm io miniz modules motion ngs overlay packages patch renderer sdl-frontend shader touch util psvpfsparser pugixml::pugixml SDL3::SDL3)
+	target_link_libraries(game-frontend PUBLIC app audio compat config ctrl dialog display ime lang gdbstub gxm io miniz modules motion ngs overlay packages patch renderer sdl-frontend shader touch util psvpfsparser pugixml::pugixml yaml-cpp SDL3::SDL3)
 	if(WIN32)
 		target_link_libraries(game-frontend PUBLIC Version)
 	endif()

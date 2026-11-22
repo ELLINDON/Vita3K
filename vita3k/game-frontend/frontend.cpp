@@ -25,6 +25,7 @@
 
 #include "../archive.h"
 #include "input.h"
+#include "packaged_mods.h"
 #include "repatch.h"
 #include "settings.h"
 #include "settings_menu.h"
@@ -304,6 +305,7 @@ your own dump of the game, then the game starts. Everything stays in the game's 
 For the importer and scripts: --install-firmware <PUP>, --install-content <dump> [--license ...|
 --zrif ...] (install into the Vita file system, then quit; a folder or zip with rePatch/<title ID>/
 goes to ux0/rePatch/, read in place of the game's files while [game] repatch is on),
+--remove-mod <id> (take a packaged mod out again; the log names those installed),
 --dump-elfs <seconds> (run unseen, writing every module as loaded to <id>/elfdumps/, then quit).
 )";
 
@@ -331,6 +333,7 @@ int run(Profile &profile, int argc, char *argv[]) {
 
     std::vector<std::string> install_firmware;
     std::vector<InstallItem> install_content;
+    std::vector<std::string> remove_mods; // --remove-mod
     double dump_elfs_seconds = 0;
     std::string vita_fs_override;
     std::string title_id_override;
@@ -350,6 +353,8 @@ int run(Profile &profile, int argc, char *argv[]) {
         else if (arg == "--install-content" && has_value) {
             install_content.push_back({ ctx.args[++i] });
             last_part_is_dump = false;
+        } else if (arg == "--remove-mod" && has_value) {
+            remove_mods.push_back(ctx.args[++i]);
         } else if (arg == "--dump" && has_value) {
             importer_args.insert(importer_args.end(), { "--install", fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[++i]))) });
             last_part_is_dump = true;
@@ -475,7 +480,7 @@ int run(Profile &profile, int argc, char *argv[]) {
 
     // Not built yet (or --install, --dump, --add-to-steam): the importer in setup/, waited for. The
     // importer's own runs of this executable (--install-content, --dump-elfs) never get here.
-    if (install_firmware.empty() && install_content.empty() && dump_elfs_seconds <= 0) {
+    if (install_firmware.empty() && install_content.empty() && remove_mods.empty() && dump_elfs_seconds <= 0) {
         const auto built = [&] {
             if (fs::exists(settings.vita_fs / "ux0" / "app" / profile.title_id / "eboot.bin"))
                 return true;
@@ -672,7 +677,7 @@ int run(Profile &profile, int argc, char *argv[]) {
 
     init_libraries(emuenv);
 
-    if (!install_firmware.empty() || !install_content.empty()) {
+    if (!install_firmware.empty() || !install_content.empty() || !remove_mods.empty()) {
         bool ok = true;
         for (const auto &pup : install_firmware) {
             LOG_INFO("Installing firmware {}", pup);
@@ -684,8 +689,13 @@ int run(Profile &profile, int argc, char *argv[]) {
         for (const auto &item : install_content) {
             const fs::path path = fs_utils::utf8_to_path(item.path);
             LOG_INFO("Installing {}", item.path);
+            // a packaged mod (packaged_mods.h): merged into the archive it changes
+            if (const auto mod = install_packaged_mod(emuenv.vita_fs_path, path, title_ids)) {
+                LOG_ERROR_IF(!*mod, "{}: the mod could not be installed", item.path);
+                ok = *mod && ok;
+            }
             // a rePatch mod (repatch.h): beside the game, not into it
-            if (const auto mod = install_repatch(emuenv.vita_fs_path, path, title_ids)) {
+            else if (const auto mod = install_repatch(emuenv.vita_fs_path, path, title_ids)) {
                 LOG_ERROR_IF(!*mod, "{}: the mod could not be installed", item.path);
                 ok = *mod && ok;
             } else if (fs::is_directory(path)) {
@@ -711,7 +721,14 @@ int run(Profile &profile, int argc, char *argv[]) {
                 ok = !installed.empty() && std::all_of(installed.begin(), installed.end(), [](const ContentInfo &c) { return c.state; }) && ok;
             }
         }
-        LOG_INFO("Installation {}", ok ? "done" : "failed");
+        for (const auto &id : remove_mods)
+            ok = remove_packaged_mod(emuenv.vita_fs_path, id, title_ids) && ok;
+        // packaged mods merged again into an archive a rePatch mod just replaced (an undub's)
+        if (!install_content.empty())
+            for (const auto &id : title_ids)
+                if (fs::is_directory(emuenv.vita_fs_path / "ux0" / "rePatch" / id))
+                    refresh_packaged_mods(emuenv.vita_fs_path, id);
+        LOG_INFO("{} {}", remove_mods.empty() || !install_content.empty() ? "Installation" : "Removal", ok ? "done" : "failed");
 #ifdef _WIN32
         CoUninitialize();
 #endif

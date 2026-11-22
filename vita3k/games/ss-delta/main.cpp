@@ -177,6 +177,13 @@ game_frontend::IniLayout ini_layout() {
     game.settings.push_back({ "skip_intro", Kind::Bool, "false", 0, 0, {},
         "Skip the health warning and the company logos at start: the game opens on its title screen." });
     game.settings.back().title = "Skip intro logos";
+    // GitHub issue #12 (ss-delta 01-research, "Touch-only spots"): the game asks sceKernelGetModel
+    // whether it runs on a PS TV and then takes buttons where a Vita needs a touch
+    game.settings.push_back({ "pstv_mode", Kind::Bool, "false", 0, 0, {},
+        "Run as a PS TV, which has no touchscreen: the game then takes L2 or R2 (a gamepad's triggers,\n"
+        "U or O on the keyboard, [keyboard] l2 and r2) where a Vita needs a touch, e.g. pulling Librom\n"
+        "out of the bones at the start of a new game. Read when the game starts." });
+    game.settings.back().title = "PS TV controls";
     game.settings.push_back(language_setting());
     game.settings.push_back(game_frontend::button_labels_setting());
     // the Undub patch (Japanese voices, ss-delta docs/01-research.md, "Undub patch") is a rePatch mod
@@ -940,6 +947,9 @@ int main(int argc, char *argv[]) {
         cfg.clamp_color_varyings = true;
         // [game] language: the system language the game asks SceAppUtil for at boot
         cfg.sys_lang = LANGUAGES.at(values.get("game.language"));
+        // [game] pstv_mode: the PS TV model (SceSysmem) and its pads on the external ports (SceCtrl;
+        // the game reads port 0, which still takes the keyboard and the first gamepad)
+        cfg.pstv_mode = values.get_bool("game.pstv_mode");
         // [multiplayer] gamepad: one gamepad per copy of the game, read also while its window is in
         // the background
         if (values.get_int("multiplayer.gamepad") > 0)

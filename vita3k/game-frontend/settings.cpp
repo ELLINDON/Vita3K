@@ -575,8 +575,8 @@ IniSection keyboard(const std::string &extra_help) {
         "Vita button = key(s), up to two, separated by commas. Key names: A-Z, 0-9, Up, Down, Left,\n"
         "Right, Return, Space, Tab, Backspace, Escape, Left Shift, Right Shift, Left Ctrl, Right Ctrl,\n"
         "Left Alt, Right Alt, F1-F12, Keypad 0-9, or the W3C key codes (Comma, Period, Slash, Semicolon,\n"
-        "Quote, BracketLeft, Minus, Equal ...). The mouse is the touchscreen: left button front, right\n"
-        "button rear."
+        "Quote, BracketLeft, Minus, Equal ...). Also l2 and r2 (U and O unless set), a PS TV's L2/R2.\n"
+        "The mouse is the touchscreen: left button front, right button rear."
             + (extra_help.empty() ? "" : "\n" + extra_help) };
     s.free_keys = true;
     s.body = "cross = X\ncircle = C\nsquare = Z\ntriangle = V\nl = Q\nr = E\nstart = Return\nselect = Right Shift\n"

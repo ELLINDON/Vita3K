@@ -113,6 +113,8 @@ void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keybo
         { "triangle", { &Config::keyboard_button_triangle, &Config::keyboard_button_triangle_alt } },
         { "l", { &Config::keyboard_button_l1, &Config::keyboard_button_l1_alt } },
         { "r", { &Config::keyboard_button_r1, &Config::keyboard_button_r1_alt } },
+        { "l2", { &Config::keyboard_button_l2, &Config::keyboard_button_l2_alt } },
+        { "r2", { &Config::keyboard_button_r2, &Config::keyboard_button_r2_alt } },
         { "start", { &Config::keyboard_button_start, &Config::keyboard_button_start_alt } },
         { "select", { &Config::keyboard_button_select, &Config::keyboard_button_select_alt } },
         { "up", { &Config::keyboard_button_up, &Config::keyboard_button_up_alt } },
@@ -246,6 +248,10 @@ void Keyboard::update(EmuEnvState &emuenv) {
     set(cfg.keyboard_button_r1, cfg.keyboard_button_r1_alt, SCE_CTRL_R, buttons);
     set(cfg.keyboard_button_l1, cfg.keyboard_button_l1_alt, SCE_CTRL_L1, buttons_ext);
     set(cfg.keyboard_button_r1, cfg.keyboard_button_r1_alt, SCE_CTRL_R1, buttons_ext);
+    // L2/R2 (a PS TV's DualShock) exist only in the extended functions: the basic ones report the
+    // Vita's L/R in the same bits
+    set(cfg.keyboard_button_l2, cfg.keyboard_button_l2_alt, SCE_CTRL_L2, buttons_ext);
+    set(cfg.keyboard_button_r2, cfg.keyboard_button_r2_alt, SCE_CTRL_R2, buttons_ext);
 
     const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
     auto &kb = emuenv.ctrl.keyboard_state;

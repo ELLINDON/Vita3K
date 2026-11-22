@@ -116,9 +116,11 @@
 
 constexpr size_t MODULE_INFO_NUM_SEGMENTS = 4;
 
+// the SDK's values (vita-headers psp2common/kernel/sysmem.h): games test the bits, e.g.
+// Soul Sacrifice Delta's sceKernelGetModel() & 0x20000 for a PS TV; 0 and 1 matched neither
 enum SceKernelModel {
-    SCE_KERNEL_MODEL_VITA,
-    SCE_KERNEL_MODEL_VITATV
+    SCE_KERNEL_MODEL_VITA = 0x10000,
+    SCE_KERNEL_MODEL_VITATV = 0x20000
 };
 
 enum SceKernelErrorCode : uint32_t {

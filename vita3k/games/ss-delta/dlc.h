@@ -21,12 +21,25 @@
 
 #include <util/fs.h>
 
+#include <set>
 #include <string>
+
+struct EmuEnvState;
 
 namespace ss_delta {
 
 // True when the installed game (app_dir = ux0/app/<title ID>) has the add-ons' pacts and raiments
 // in its data; otherwise `why` says what is missing.
 bool addon_data_present(const fs::path &app_dir, std::string &why);
+
+// The add-ons that PSN handed out as gifts on Cassus's Claim Gift page (Soulbinder, the Necky
+// raiment, the hoods ...), given as that page would, in the loaded save (GitHub issue #11); with
+// `japan`, also the raiments only Japan had (Sylvan, Benkei).
+struct GiftState {
+    int wait = 0; // ticks until the save is looked at again
+    std::set<std::string> logged;
+};
+// Called every tick while [game] dlc is on.
+void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan);
 
 } // namespace ss_delta

@@ -158,8 +158,15 @@ game_frontend::IniLayout ini_layout() {
         { { "dlc", Kind::Bool, "true", 0, 0, {},
             "Unlock the add-ons (raiments, hoods, additional and otherworldly pacts). Their content is in the\n"
             "game's own data since update 1.30; PSN, which recorded the purchases, is closed. The save's\n"
-            "system.bin is changed once (a copy goes to ss-delta/save-backups/)." } } };
+            "system.bin is changed once (a copy goes to ss-delta/save-backups/). The add-ons PSN gave as\n"
+            "gifts at Cassus (Soulbinder, Necky and Slave raiments, the hoods ...) are given in the\n"
+            "loaded save, as taking the gifts would; the game keeps them when it saves." } } };
     game.settings[0].title = "Add-ons (DLC)";
+    // GitHub issue #11, part 2: in the game's data, given only in Japan (Sylvan) or not at all (Benkei)
+    game.settings.push_back({ "japan_raiments", Kind::Bool, "true", 0, 0, {},
+        "With dlc, also give the raiments only Japan had: Sylvan (a gift there) and Benkei. Both are\n"
+        "in the game's data; they stay in the save once it is written." });
+    game.settings.back().title = "Japan-only raiments";
     game.settings.push_back({ "skip_intro", Kind::Bool, "false", 0, 0, {},
         "Skip the health warning and the company logos at start: the game opens on its title screen." });
     game.settings.back().title = "Skip intro logos";
@@ -839,6 +846,7 @@ int main(int argc, char *argv[]) {
     int frame_rate = 30; // what update_frame_rate last set (-1: left alone)
     Address intro_skipped = 0; // the logo control task skip_intro_logos handled
     CheatState cheats;
+    ss_delta::GiftState gifts; // [game] dlc: the add-ons PSN gave as gifts
 
     game_frontend::Profile profile;
     profile.title_id = TITLE_ID;
@@ -971,6 +979,8 @@ int main(int argc, char *argv[]) {
         if (ctx.settings->values.get_bool("game.skip_intro"))
             intro_skipped = skip_intro_logos(*ctx.emuenv, intro_skipped);
         apply_cheats(*ctx.emuenv, ctx.settings->values, cheats);
+        if (ctx.settings->values.get_bool("game.dlc"))
+            ss_delta::grant_addon_gifts(*ctx.emuenv, gifts, ctx.settings->values.get_bool("game.japan_raiments"));
         if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
             // auto: from the first connected gamepad's own labels (it may change while the game runs)
             std::string style = ctx.settings->values.get("game.button_labels");

@@ -99,6 +99,22 @@ void set_env(const char *name, const std::string &value) {
 #endif
 }
 
+// The last runs' logs: vita3k.log becomes vita3k.1.log (the run before), .1 becomes .2, and so on up
+// to vita3k.<kept>.log; the oldest is dropped. A report sent after the game was started again then
+// still carries the run that crashed (a launcher sends the whole log folder). A log another copy of
+// the game still has open stays where it is.
+void keep_previous_logs(const fs::path &dir, int kept) {
+    const auto name = [&](int i) { return dir / (i == 0 ? std::string("vita3k.log") : fmt::format("vita3k.{}.log", i)); };
+    boost::system::error_code ec;
+    if (!fs::exists(name(0), ec))
+        return;
+    fs::remove(name(kept), ec);
+    for (int i = kept - 1; i >= 0; i--) {
+        if (fs::exists(name(i), ec))
+            fs::rename(name(i), name(i + 1), ec);
+    }
+}
+
 // SSD_AOT (the fork's list of recompiled modules) from the libraries in `dir` (ssd_aot_*.dll on
 // Windows, .dylib on macOS, .so elsewhere), unless it is set already
 std::string select_recompiled_modules(const fs::path &dir) {
@@ -511,6 +527,7 @@ int run(Profile &profile, int argc, char *argv[]) {
     fs::create_directories(root_paths.get_patch_path());
     ctx.settings = &settings;
 
+    keep_previous_logs(ctx.data_dir, 4); // five in all, with this run's
     if (logging::init(root_paths, false) != Success)
         return 1;
     logging::set_level(static_cast<spdlog::level::level_enum>(settings.log_level));

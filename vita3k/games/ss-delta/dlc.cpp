@@ -510,6 +510,16 @@ constexpr std::array<uint32_t, 6> WORN = { 0x5b770, 0x5b774, 0x5bf96, 0x5bf9a, 0
 // a PlayStation Store consumable: on Yes in the unlock dialog (text 10062400) the game sets the bit
 // (0x81024c14) and saves.
 constexpr uint32_t BLANK_PAGE_SLOTS = 0xc2508, BLANK_PAGE_ALL = 0xff;
+// A Memory Clod spend is a network task (0x81278238 makes it, 0x812782f4 runs it; vtable 0x81c5d004),
+// at *0x81c953d0 while it lives: +0x44 its state, +0x48 1 once the clods are spent, +0x54 1 for a pact
+// page made with "Sacrifice memory" and 3 for a slot (taken to be the clods needed), +0x58 and +0x5c the system
+// texts of its dialogs (2007, "Insufficient Memory Clods", for both spends), +0x60 1 for the store page
+// (START, "Add memory"). Offline it ends without +0x48; the screen that asked waits while the task lives
+// and takes +0x48 = 1 as paid (0x81021838). Only state 11 (0x81278412) writes +0x48, so 1 set from
+// here stays.
+constexpr Address CLOD_TASK_HOLDER = 0x81c953d0, CLOD_TASK_VTABLE = 0x81c5d004;
+constexpr uint32_t CLOD_TASK_SIZE = 0x68, CLOD_PAID = 0x48, CLOD_NEEDED = 0x54, CLOD_SHORT_TEXT = 0x58, CLOD_STORE = 0x60;
+constexpr uint32_t CLOD_SHORT_TEXT_ID = 2007;
 
 std::vector<uint32_t> raiment_rows(uint32_t first, uint32_t count) {
     std::vector<uint32_t> rows;
@@ -694,6 +704,22 @@ private:
 } // namespace
 
 void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan) {
+    // every tick: a Memory Clod spend lives for a few frames
+    MemState &mem = emuenv.mem;
+    const auto mapped = [&](Address a, uint32_t size) { return a && is_valid_addr_range(mem, a, a + size); };
+    if (mapped(CLOD_TASK_HOLDER, 4)) {
+        const Address task = *Ptr<uint32_t>(CLOD_TASK_HOLDER).get(mem);
+        if (mapped(task, CLOD_TASK_SIZE) && *Ptr<uint32_t>(task).get(mem) == CLOD_TASK_VTABLE) {
+            const auto field = [&](uint32_t offset) { return Ptr<uint32_t>(task + offset).get(mem); };
+            const int32_t needed = static_cast<int32_t>(*field(CLOD_NEEDED));
+            if (*Ptr<uint8_t>(task + CLOD_STORE).get(mem) == 0 && *field(CLOD_SHORT_TEXT) == CLOD_SHORT_TEXT_ID && needed > 0
+                && *field(CLOD_PAID) != 1) {
+                *field(CLOD_PAID) = 1;
+                LOG_INFO("Add-ons: {} Memory Clod{} taken as spent ({}; the PlayStation Store that sold them is closed)", needed,
+                    needed == 1 ? "" : "s", needed == 1 ? "a pact page made with Sacrifice memory" : "a Blank Page slot");
+            }
+        }
+    }
     if (state.wait-- > 0)
         return;
     state.wait = 30; // about twice a second

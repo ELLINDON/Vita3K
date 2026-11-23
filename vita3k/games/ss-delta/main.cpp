@@ -141,8 +141,8 @@ game_frontend::IniLayout ini_layout() {
             layout::fullscreen(id, exe),
             layout::vsync(),
             { "frame_rate", Kind::Choice, "60", 0, 0, { "30", "60" },
-                "The game's frame rate: 60, or 30 as on the Vita. The game keeps its speed at 60; loading\n"
-                "screens still run at 30 (they don't finish at 60)." },
+                "The game's frame rate: 60, or 30 as on the Vita. The game keeps its speed at 60. Loading\n"
+                "screens run at 30 only with a game built before ss-delta 0.5.0 (build it again)." },
             layout::filter(),
             // off: no visible change on the shimmering ST17 ground (the owner, 2026-10-14), so its cause
             // there is something else (**hypothesis**: explicit-LOD sampling or geometry)

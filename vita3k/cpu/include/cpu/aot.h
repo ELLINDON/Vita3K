@@ -47,6 +47,11 @@ Address aot_halt();
 // SSD_AOT_NATIVE=1 with recompiled modules: threads run on NativeCPU, without the JIT
 bool aot_native_cpu();
 
+// A module (by the name stem of its ELF, e.g. "eboot") runs natively, its code checked against guest
+// memory, and was generated with an override feature of the game project (aot_abi.h
+// ARMRECOMP_AOT_FEATURES; ss-delta docs/decisions.md D30). False until the module's first native call.
+bool aot_module_has_feature(const std::string &module_stem, const std::string &feature);
+
 // Where a module's native code expects its code segment: the page of its first function, found by
 // the name of the ELF it was generated from without the extension (e.g. "adhoc_matching"), or 0.
 // The loader places a relocatable module there when that memory is free, so that a module loaded

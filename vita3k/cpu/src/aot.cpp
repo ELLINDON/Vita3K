@@ -53,6 +53,7 @@ enum class Verified : int {
 struct LoadedModule {
     std::string path;
     armrecomp::AotInitFn init = nullptr;
+    std::string features; // ARMRECOMP_AOT_FEATURES, space-separated ("" for a module without it)
     const armrecomp::AotModule *module = nullptr;
     uint32_t lo = 0, hi = 0; // [first entry, last entry]
     uint32_t end = 0; // end of the last function's code
@@ -134,6 +135,7 @@ void load_modules() {
             continue;
         }
         const auto init = reinterpret_cast<armrecomp::AotInitFn>(GetProcAddress(dll, ARMRECOMP_AOT_INIT));
+        const auto features = reinterpret_cast<const char *(*)()>(GetProcAddress(dll, ARMRECOMP_AOT_FEATURES));
 #else
         // never unloaded, like the DLLs; RTLD_LOCAL keeps each module's symbols to itself
         void *const dll = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -142,6 +144,7 @@ void load_modules() {
             continue;
         }
         const auto init = reinterpret_cast<armrecomp::AotInitFn>(dlsym(dll, ARMRECOMP_AOT_INIT));
+        const auto features = reinterpret_cast<const char *(*)()>(dlsym(dll, ARMRECOMP_AOT_FEATURES));
 #endif
         if (!init) {
             LOG_ERROR("AOT: {} has no {}", path, ARMRECOMP_AOT_INIT);
@@ -150,6 +153,11 @@ void load_modules() {
         auto m = std::make_unique<LoadedModule>();
         m->path = path;
         m->init = init;
+        if (features) {
+            const char *const list = features();
+            m->features = list ? list : "";
+            LOG_INFO_IF(!m->features.empty(), "AOT: {} has the project's fixes: {}", path, m->features);
+        }
         registry.modules.push_back(std::move(m));
     }
 }
@@ -432,6 +440,26 @@ Address aot_preferred_base(const std::string &module_stem) {
             return (m->module->functions[0].addr & ~1u) & ~0xFFFu;
     }
     return 0;
+}
+
+bool aot_module_has_feature(const std::string &module_stem, const std::string &feature) {
+    if (!registry.enabled)
+        return false;
+    for (const auto &m : registry.modules) {
+        if (!m->module || !m->module->name || m->verified != Verified::yes)
+            continue;
+        std::string name = m->module->name;
+        if (const auto dot = name.rfind('.'); dot != std::string::npos)
+            name.resize(dot);
+        if (name != module_stem)
+            continue;
+        std::stringstream list{ m->features };
+        std::string item;
+        while (list >> item)
+            if (item == feature)
+                return true;
+    }
+    return false;
 }
 
 AotFn aot_lookup(uint32_t addr) {

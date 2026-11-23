@@ -25,6 +25,7 @@
 #include "saves.h"
 
 #include <config/state.h>
+#include <cpu/aot.h>
 #include <ctrl/state.h>
 #include <emuenv/state.h>
 #include <gxm/state.h>
@@ -348,11 +349,15 @@ void unscale_depth_uvs(SceGxmProgram &program) {
 // created for 30 fps (0x812ab888: movs r0, #30), whose period in microseconds is the first u64 of
 // the timer object (*(*0x81c957cc)), and flips every 2nd vblank (threshold at 0x81d3a630). Both
 // are data, so they are changed in guest memory once the game has set them up. Game logic steps
-// by the measured frame time, so it keeps its speed at 60 fps, but the loading screen does not
-// finish with frames shorter than about 1/45 s: its "roading_loop" animation never gets told to
-// stop. So loading screens run at 30 fps: the NowLoadingTask singleton (*0x81c9603c) shows one
-// while its state (+0xa4) is 2, 3 or 5 (opening, "roading_loop", "roading_end"; 0x812b58ec). After
-// a quest it plays the loop backwards (6) and rests in 4 until reset, so those stay at 60.
+// by the measured frame time, so it keeps its speed at 60 fps. The quest-start loading screen
+// didn't finish with frames shorter than about 1/45 s: the loader works a step a frame and can be
+// done while the screen's opening still plays, and the one call that ends the "roading_loop"
+// animation (0x812b50ce) then comes before the loop starts, which then never ends. The game's code
+// is fixed for that in the recompiled eboot (ss-delta overrides/eboot.json, feature "loading_race",
+// D16/D30). An eboot without it (built before the fix, or run on the JIT) still gets the old way:
+// loading screens at 30 fps, while the NowLoadingTask singleton (*0x81c9603c) is in state (+0xa4) 2,
+// 3 or 5 (opening, "roading_loop", "roading_end"; 0x812b58ec). After a quest it plays the loop
+// backwards (6) and rests in 4 until reset, so those stay at the set rate.
 // The frame timer's period for a rate. At 60 it is 16000 us, not 16666: the game waits out the
 // timer and then flips on the next vblank, and a host wait overshoots by up to about a millisecond,
 // so with 16666 a few frames a second just missed their vblank and took two (57-58 fps on every GPU).
@@ -376,7 +381,15 @@ int update_frame_rate(EmuEnvState &emuenv, int fps, int current) {
     const uint32_t *const loading_task = u32(0x81c9603c);
     const uint32_t *const loading_state = loading_task && *loading_task ? u32(*loading_task + 0xa4) : nullptr;
     const uint32_t state = loading_state ? *loading_state : 0;
-    const int want = state == 2 || state == 3 || state == 5 ? 30 : fps;
+    const bool loading = state == 2 || state == 3 || state == 5;
+    // asked when a loading screen starts: the eboot's native code is checked by then
+    const bool loading_fixed = loading && aot_module_has_feature("eboot", "loading_race");
+    static bool told = false;
+    if (loading && !told) {
+        told = true;
+        LOG_INFO("frame_rate: loading screens {}", loading_fixed ? "at the set rate (the recompiled eboot has the fix)" : "at 30 fps (an eboot without the loading-screen fix)");
+    }
+    const int want = loading && !loading_fixed ? 30 : fps;
     if (want == current && *period == frame_period_us(want))
         return current;
     if ((*period != frame_period_us(30) && *period != frame_period_us(fps)) || (*flip != 2 && *flip != 60u / fps)) {

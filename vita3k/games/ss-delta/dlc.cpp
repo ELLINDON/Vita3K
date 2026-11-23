@@ -489,6 +489,7 @@ constexpr Address SAVE_BLOCK_HOLDER = 0x81c98618, SAVE_IMAGE_HOLDER = 0x81c9a160
 constexpr Address COSTUME_TABLE_HOLDER = 0x81c9a28c, COSTUME_COUNT = 0x81d301d0;
 constexpr Address STAMP_TABLE_HOLDER = 0x81c9a3e4, STAMP_COUNT = 0x81d329b0;
 constexpr uint32_t IMAGE_SIZE = 0xef0e0; // the save file's size, also in the image's header (+0x8)
+constexpr uint32_t IMAGE_CHECKSUM_KIND = 0x18, CHECKSUM_KIND = 0x22, IMAGE_CHECKSUM = 0x1c;
 constexpr uint32_t RECEIVED = 0xc2ec8;
 constexpr uint32_t IMAGE_DATA = 0x84; // what 0x8177e9da returns
 constexpr uint32_t IMAGE_COSTUMES = 0x522dc, IMAGE_COSTUME_ROWS = 0x300;
@@ -546,7 +547,7 @@ public:
         : mem(mem) {}
 
     bool open() {
-        image = holder(SAVE_IMAGE_HOLDER, RECEIVED + 0x20);
+        image = holder(SAVE_IMAGE_HOLDER, IMAGE_SIZE);
         const Address table = holder(COSTUME_TABLE_HOLDER, 0);
         const uint32_t *count = word(COSTUME_COUNT);
         costume_count = count && table && *count > 0 && *count <= IMAGE_COSTUME_ROWS ? *count : 0;
@@ -670,6 +671,22 @@ public:
         return slots && !(*slots & ~BLANK_PAGE_ALL) ? slots : nullptr;
     }
 
+    // The image's checksum: +0x1c, CRC-32/BZIP2 of the whole image with it zeroed, when +0x18 is 0x22.
+    // The game sets it when it writes the file (0x8178322a) and checks it after reading one
+    // (0x81783248, from 0x8178ab88), once the player confirms "Loading complete"; the check leaves
+    // it zeroed. A write into the image while that dialog is up failed the check ("Failed to load
+    // save data.", the story-complete test save with gifts not yet in it, 2026-11-23).
+    enum class Checksum { None, Valid, Other };
+    Checksum checksum() const {
+        const uint32_t stored = read<uint32_t>(image + IMAGE_CHECKSUM);
+        if (stored == 0)
+            return Checksum::None;
+        if (read<uint32_t>(image + IMAGE_CHECKSUM_KIND) != CHECKSUM_KIND)
+            return Checksum::Other;
+        return image_crc() == stored ? Checksum::Valid : Checksum::Other;
+    }
+    void refresh_checksum() { write<uint32_t>(image + IMAGE_CHECKSUM, image_crc()); }
+
     bool offering_obtained(Address entry) const { return read<uint32_t>(entry + OFFERING_RANK0_FLAGS) & OFFERING_OBTAINED; }
     // 0x812f3c30 with one of rank 0, marked new
     void give_offering(Address entry) {
@@ -695,6 +712,26 @@ private:
     }
     template <typename T>
     void write(Address a, T v) { std::memcpy(Ptr<uint8_t>(a).get(mem), &v, sizeof(T)); }
+    // 0x81803dc2 over the image, its checksum field taken as 0 (the image was mapped whole in open())
+    uint32_t image_crc() const {
+        static const std::array<uint32_t, 256> table = [] {
+            std::array<uint32_t, 256> t{};
+            for (uint32_t i = 0; i < 256; i++) {
+                uint32_t c = i << 24;
+                for (int bit = 0; bit < 8; bit++)
+                    c = c & 0x80000000u ? (c << 1) ^ 0x04c11db7u : c << 1;
+                t[i] = c;
+            }
+            return t;
+        }();
+        const uint8_t *p = Ptr<uint8_t>(image).get(mem);
+        uint32_t crc = 0xffffffffu;
+        for (uint32_t i = 0; i < IMAGE_SIZE; i++) {
+            const uint8_t byte = i - IMAGE_CHECKSUM < 4 ? 0 : p[i];
+            crc = (crc << 8) ^ table[(crc >> 24) ^ byte];
+        }
+        return ~crc;
+    }
 
     MemState &mem;
     Address costume_table = 0;
@@ -725,6 +762,12 @@ void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan) {
     state.wait = 30; // about twice a second
     SaveView save(emuenv.mem);
     if (!save.open())
+        return;
+    // a save just read (or written) carries its checksum, which the game checks after "Loading
+    // complete": what is written into it here keeps the checksum right. A checksum that doesn't
+    // match is an image the game is still filling or writing: left alone until it is done
+    const SaveView::Checksum checksum = save.checksum();
+    if (checksum == SaveView::Checksum::Other)
         return;
     if (const uint32_t worn = save.worn_missing(); worn && state.logged.insert(fmt::format("worn {:#x} {}", save.image, worn)).second)
         LOG_WARN("Add-ons: the raiment worn (row {}) isn't in the game's raiments (the original raiments mod removed?): "
@@ -795,6 +838,8 @@ void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan) {
         }
     } else if (state.logged.insert(fmt::format("{:#x} blank page", save.image)).second)
         missing.push_back("the Blank Page slots");
+    if (checksum == SaveView::Checksum::Valid && save.checksum() != SaveView::Checksum::Valid)
+        save.refresh_checksum();
     if (!given.empty())
         LOG_INFO("Add-ons: gave {} in the save ({:#x}{})", fmt::join(given, ", "), save.image,
             save.block ? "" : ", the play block not yet holding it");

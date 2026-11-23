@@ -21,6 +21,7 @@
 
 #include "../../game-frontend/button_labels.h"
 #include "../../game-frontend/profile.h"
+#include "allies.h"
 #include "dlc.h"
 #include "saves.h"
 
@@ -177,6 +178,14 @@ game_frontend::IniLayout ini_layout() {
         "on in a copy of the game's patch archive in ux0/rePatch/ (Mods (rePatch) must be on). Applies at\n"
         "the next start; off takes them out of the game again." });
     game.settings.back().title = "Original's Spirits' offerings";
+    // ss-delta 01-research, "Sortiara as an ally": a built-in mod, so off by default
+    game.settings.push_back({ "sortiara_ally", Kind::Bool, "false", 0, 0, {},
+        "Sortiara, who fights beside you in the early story, joins your allies (Portraiture > Allies),\n"
+        "as a story ally joins after a quest. The game has all she needs as an ally (her offerings,\n"
+        "voice, portrait) but never adds her. Given once a save; the game keeps her when it saves, and\n"
+        "switching this off later doesn't take her away." });
+    game.settings.back().title = "Sortiara as an ally";
+    game.settings.back().live = true;
     game.settings.push_back({ "skip_intro", Kind::Bool, "false", 0, 0, {},
         "Skip the health warning and the company logos at start: the game opens on its title screen." });
     game.settings.back().title = "Skip intro logos";
@@ -876,6 +885,7 @@ int main(int argc, char *argv[]) {
     Address intro_skipped = 0; // the logo control task skip_intro_logos handled
     CheatState cheats;
     ss_delta::GiftState gifts; // [game] dlc: the add-ons PSN gave as gifts
+    ss_delta::AllyState allies; // [game] sortiara_ally
 
     game_frontend::Profile profile;
     profile.title_id = TITLE_ID;
@@ -1026,6 +1036,8 @@ int main(int argc, char *argv[]) {
         apply_cheats(*ctx.emuenv, ctx.settings->values, cheats);
         if (ctx.settings->values.get_bool("game.dlc"))
             ss_delta::grant_addon_gifts(*ctx.emuenv, gifts, ctx.settings->values.get_bool("game.japan_raiments"));
+        if (ctx.settings->values.get_bool("game.sortiara_ally"))
+            ss_delta::add_sortiara_ally(*ctx.emuenv, allies);
         if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
             // auto: from the first connected gamepad's own labels (it may change while the game runs)
             std::string style = ctx.settings->values.get("game.button_labels");

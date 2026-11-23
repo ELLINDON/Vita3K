@@ -345,6 +345,12 @@ your own dump of the game, then the game starts. Everything stays in the game's 
   --cache <folder>, --jobs <n>
                               (with --dump) keep the importer's downloads in that folder for the
                               next time; compile with that many jobs
+  --offline <folder|file>     take the importer's downloads (the firmware, the compiler) from there
+                              first, matched by size and SHA-256 whatever their names; repeatable.
+                              The game folder's offline/ is searched unasked
+  --download-only <folder> [--for windows,linux,macos,android|all]
+                              everything the importer downloads, for this platform or those, into
+                              that folder (then --offline <folder> needs no network), then quit
   --progress                  (with --dump) also print "progress <0-1> <text>" lines, for a
                               launcher's progress bar (RecompLauncher)
   --set <section.key=value>   a setting for this run only, over the settings file (the list below)
@@ -397,6 +403,7 @@ int run(Profile &profile, int argc, char *argv[]) {
     std::vector<std::string> overrides; // --set
     std::vector<std::string> android_options; // --android's, passed on to the importer
     bool open_importer = false, add_to_steam = false, help = false, build_only = false, android = false;
+    std::string download_only; // --download-only <folder>: the importer's downloads into it, then quit
     bool last_part_is_dump = false; // a --license or --zrif belongs to the part before it
     std::vector<std::string> unknown_args;
     for (size_t i = 0; i < ctx.args.size(); i++) {
@@ -421,8 +428,10 @@ int run(Profile &profile, int argc, char *argv[]) {
             open_importer = true;
         else if (arg == "--accept-microsoft-license" || arg == "--shortcut" || arg == "--steam" || arg == "--progress")
             importer_options.push_back(arg);
-        else if ((arg == "--cache" || arg == "--jobs") && has_value)
-            importer_options.insert(importer_options.end(), { arg, arg == "--cache" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[i + 1]))) : ctx.args[i + 1] }), i++;
+        else if ((arg == "--cache" || arg == "--jobs" || arg == "--offline" || arg == "--for") && has_value)
+            importer_options.insert(importer_options.end(), { arg, arg == "--cache" || arg == "--offline" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[i + 1]))) : ctx.args[i + 1] }), i++;
+        else if (arg == "--download-only" && has_value)
+            download_only = fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[++i])));
         else if (arg == "--add-to-steam")
             add_to_steam = true;
         else if (arg == "--android")
@@ -541,6 +550,19 @@ int run(Profile &profile, int argc, char *argv[]) {
             return std::any_of(profile.other_title_ids.begin(), profile.other_title_ids.end(),
                 [&](const std::string &id) { return fs::exists(settings.vita_fs / "ux0" / "app" / id / "eboot.bin"); });
         };
+        if (!download_only.empty()) {
+            // everything the importer downloads, into a folder it uses later without the network
+            if (!has_importer(game_dir)) {
+                fail(fmt::format("{} has no importer (setup/).", fs_utils::path_to_utf8(game_dir)));
+                return 1;
+            }
+            attach_parent_console();
+            std::vector<std::string> args{ "--download-only", download_only };
+            args.insert(args.end(), importer_options.begin(), importer_options.end());
+            args.insert(args.end(), android_options.begin(), android_options.end());
+            const int code = run_importer(game_dir, own_executable(), args, true);
+            return code < 0 ? 1 : code;
+        }
         if (add_to_steam || android || open_importer || !importer_args.empty() || !built()) {
             if (has_importer(game_dir)) {
                 // --android's device options (anything but --apk and --push-only) mean no window

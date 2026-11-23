@@ -338,8 +338,6 @@ your own dump of the game, then the game starts. Everything stays in the game's 
                               Wi-Fi (the address and code its Wireless debugging screen shows);
                               copy again what was built before; accept Google's licence for adb,
                               which the importer downloads; another APK than the release's
-  --accept-microsoft-license  (Windows, with --dump) accept Microsoft's licence for the compiler's
-                              C++ runtime and Windows SDK, which the importer downloads
   --shortcut, --steam         (with --dump) a desktop shortcut (Windows), the game in Applications
                               (macOS) or the applications menu (Linux); add it to Steam (Linux)
   --cache <folder>, --jobs <n>

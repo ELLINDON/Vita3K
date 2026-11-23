@@ -35,7 +35,8 @@ bool addon_data_present(const fs::path &app_dir, std::string &why);
 // The add-ons that PSN handed out as gifts on Cassus's Claim Gift page (Soulbinder, the Necky
 // raiment, the hoods ...), given as that page would, in the loaded save (GitHub issue #11); with
 // `japan`, also the raiments only Japan had (Sylvan, Benkei). With the mods that add them, the
-// original game's two raiments and its pre-order Spirits' offerings too.
+// original game's two raiments and its pre-order Spirits' offerings too. Also unlocks Blank Page's
+// five slots that needed Memory Clods, a PlayStation Store consumable (GitHub issue #15).
 struct GiftState {
     int wait = 0; // ticks until the save is looked at again
     std::set<std::string> logged;

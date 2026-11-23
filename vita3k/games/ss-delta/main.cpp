@@ -161,7 +161,8 @@ game_frontend::IniLayout ini_layout() {
             "game's own data since update 1.30; PSN, which recorded the purchases, is closed. The save's\n"
             "system.bin is changed once (a copy goes to ss-delta/save-backups/). The add-ons PSN gave as\n"
             "gifts at Cassus (Soulbinder, Necky and Slave raiments, the hoods ...) are given in the\n"
-            "loaded save, as taking the gifts would; the game keeps them when it saves." } } };
+            "loaded save, as taking the gifts would, and Blank Page's five slots that needed Memory Clods\n"
+            "(sold on the PlayStation Store) are unlocked; the game keeps them when it saves." } } };
     game.settings[0].title = "Add-ons (DLC)";
     // GitHub issue #11, part 2: in the game's data, given only in Japan (Sylvan) or not at all (Benkei)
     game.settings.push_back({ "japan_raiments", Kind::Bool, "true", 0, 0, {},

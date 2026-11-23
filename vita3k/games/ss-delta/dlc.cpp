@@ -504,6 +504,12 @@ constexpr uint32_t EMPTY_RECORD = 0xffffffff; // the image's raiment records pas
 // the raiments worn, top and bottom (u16 costume rows), in three records of the image (found with the
 // mod's Dragonslayer worn: 9 and 117 before, 732 and 732 after, in each)
 constexpr std::array<uint32_t, 6> WORN = { 0x5b770, 0x5b774, 0x5bf96, 0x5bf9a, 0xeeb86, 0xeeb8a };
+// Blank Page (GitHub issue #15, ss-delta 01-research "Blank Page slots"): the slots that can hold a
+// created pact page are a bitmask, bit n for slot n, a u32 at image + 0xc075c (0x81789d02) + 0x1da0 +
+// 0xc. The screen has 8 slots; a new save has 0x7. The other five were unlocked with Memory Clods,
+// a PlayStation Store consumable: on Yes in the unlock dialog (text 10062400) the game sets the bit
+// (0x81024c14) and saves.
+constexpr uint32_t BLANK_PAGE_SLOTS = 0xc2508, BLANK_PAGE_ALL = 0xff;
 
 std::vector<uint32_t> raiment_rows(uint32_t first, uint32_t count) {
     std::vector<uint32_t> rows;
@@ -647,6 +653,13 @@ public:
         }
         return 0;
     }
+    // the Blank Page slots the save has unlocked, nullptr when the mask holds bits past slot 7 (not
+    // the mask, then)
+    uint32_t *blank_page_slots() {
+        uint32_t *slots = word(image + BLANK_PAGE_SLOTS);
+        return slots && !(*slots & ~BLANK_PAGE_ALL) ? slots : nullptr;
+    }
+
     bool offering_obtained(Address entry) const { return read<uint32_t>(entry + OFFERING_RANK0_FLAGS) & OFFERING_OBTAINED; }
     // 0x812f3c30 with one of rank 0, marked new
     void give_offering(Address entry) {
@@ -748,6 +761,14 @@ void grant_addon_gifts(EmuEnvState &emuenv, GiftState &state, bool japan) {
         if (done)
             given.push_back(gift.box);
     }
+    // the Blank Page slots that needed Memory Clods; the game keeps the mask when it saves
+    if (uint32_t *slots = save.blank_page_slots()) {
+        if (*slots != BLANK_PAGE_ALL) {
+            *slots = BLANK_PAGE_ALL;
+            given.push_back("the five Blank Page slots (Memory Clods)");
+        }
+    } else if (state.logged.insert(fmt::format("{:#x} blank page", save.image)).second)
+        missing.push_back("the Blank Page slots");
     if (!given.empty())
         LOG_INFO("Add-ons: gave {} in the save ({:#x}{})", fmt::join(given, ", "), save.image,
             save.block ? "" : ", the play block not yet holding it");

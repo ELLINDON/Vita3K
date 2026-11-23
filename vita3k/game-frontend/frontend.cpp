@@ -57,6 +57,7 @@
 #include <util/sysinfo.h>
 
 #include <rif2zrif.h>
+#include <zrif2rif.h>
 
 #ifdef _WIN32
 #include <combaseapi.h>
@@ -288,9 +289,26 @@ std::string pkg_zrif(const fs::path &pkg, const std::string &zrif, const std::st
 
 struct InstallItem {
     std::string path;
-    std::string license; // --license after it: work.bin or .rif, for a pkg
+    std::string license; // --license after it: work.bin or .rif (a folder's or zip's: the game's, ss-delta #13)
     std::string zrif; // --zrif after it
 };
+
+// a folder's or zip's licence given with it, as a file: --license as it is, --zrif written to temp; empty
+// when none was given (the dump's own then)
+fs::path dump_license_file(const InstallItem &item, const fs::path &temp) {
+    if (!item.license.empty())
+        return fs_utils::utf8_to_path(item.license);
+    if (item.zrif.empty())
+        return {};
+    fs::create_directories(temp.parent_path());
+    fs::ofstream file(temp, std::ios::binary);
+    if (!file) {
+        LOG_ERROR("{} could not be written", temp);
+        return {};
+    }
+    zrif2rif(item.zrif, file);
+    return temp;
+}
 
 } // namespace
 
@@ -736,7 +754,15 @@ int run(Profile &profile, int argc, char *argv[]) {
                 LOG_ERROR_IF(!*mod, "{}: the mod could not be installed", item.path);
                 ok = *mod && ok;
             } else if (fs::is_directory(path)) {
-                ok = install_contents(emuenv, path) > 0 && ok;
+                // every content in the folder, not just one: a game that failed beside an add-on that
+                // installed is a failed install (ss-delta #13)
+                const fs::path temp = emuenv.cache_path / "dump_licence.rif";
+                uint32_t found = 0;
+                const uint32_t installed = install_contents(emuenv, path, dump_license_file(item, temp), &found);
+                fs::remove(temp);
+                LOG_ERROR_IF(installed < found, "{}: {} of the {} contents in it could not be installed", item.path,
+                    found - installed, found);
+                ok = installed > 0 && installed == found && ok;
             } else if (string_utils::tolower(path.extension().string()) == ".pkg") {
                 std::string zrif = pkg_zrif(path, item.zrif, item.license, emuenv.vita_fs_path);
                 if (zrif.empty()) {
@@ -754,7 +780,9 @@ int run(Profile &profile, int argc, char *argv[]) {
                 LOG_ERROR_IF(!installed, "{} could not be installed", item.path);
                 ok = installed && ok;
             } else {
-                const auto installed = install_archive(emuenv, path);
+                const fs::path temp = emuenv.cache_path / "dump_licence.rif";
+                const auto installed = install_archive(emuenv, path, nullptr, nullptr, dump_license_file(item, temp));
+                fs::remove(temp);
                 ok = !installed.empty() && std::all_of(installed.begin(), installed.end(), [](const ContentInfo &c) { return c.state; }) && ok;
             }
         }

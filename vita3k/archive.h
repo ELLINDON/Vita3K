@@ -43,5 +43,7 @@ struct ContentInfo {
     bool state = false;
 };
 
-std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &archive_path, const std::function<void(ArchiveContents)> &progress_callback = nullptr, const ReinstallCallback &reinstall_callback = nullptr);
-uint32_t install_contents(EmuEnvState &emuenv, const fs::path &path);
+// license: the game's licence given with the dump (work.bin or .rif), used in place of the dump's own
+std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &archive_path, const std::function<void(ArchiveContents)> &progress_callback = nullptr, const ReinstallCallback &reinstall_callback = nullptr, const fs::path &license = {});
+// the number of contents installed; found: the number of contents in the folder
+uint32_t install_contents(EmuEnvState &emuenv, const fs::path &path, const fs::path &license = {}, uint32_t *found = nullptr);

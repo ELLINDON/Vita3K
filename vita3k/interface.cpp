@@ -56,6 +56,9 @@
 
 #include "patch/patch.h"
 
+#include <algorithm>
+#include <array>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -93,6 +96,25 @@ static std::string fallback_theme_root_name(const std::string &content_path) {
     return (separator == std::string::npos) ? trimmed : trimmed.substr(separator + 1);
 }
 
+// A licence's kind, from its account ID (0x08). NoNpDrm's licences (and the work.bin made from a zRIF) carry
+// the fake 0x0123456789ABCDEF and the content's key in the clear. The licence a Vita keeps with a game it
+// installed (its sce_sys/package/work.bin, ux0:license) carries the PSN account's ID and a key that only
+// that console can decrypt: nothing outside the Vita can use it (ss-delta #13).
+enum class LicenseKind {
+    unknown,
+    nonpdrm,
+    account
+};
+
+static LicenseKind license_kind(const fs::path &rif) {
+    fs::ifstream file(rif, std::ios::binary);
+    std::array<char, 0x200> data{};
+    if (!file || !file.read(data.data(), data.size()))
+        return LicenseKind::unknown;
+    static constexpr unsigned char fake_aid[8] = { 0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01 };
+    return std::memcmp(data.data() + 8, fake_aid, sizeof(fake_aid)) == 0 ? LicenseKind::nonpdrm : LicenseKind::account;
+}
+
 static bool is_nonpdrm(EmuEnvState &emuenv, const fs::path &output_path) {
     const auto app_license_path{ emuenv.vita_fs_path / "ux0/license" / emuenv.app_info.app_title_id / fmt::format("{}.rif", emuenv.app_info.app_content_id) };
     const auto is_patch_found_app_license = (emuenv.app_info.app_category == "gp") && fs::exists(app_license_path);
@@ -100,6 +122,15 @@ static bool is_nonpdrm(EmuEnvState &emuenv, const fs::path &output_path) {
         fs::path licpath = is_patch_found_app_license ? app_license_path : output_path / "sce_sys/package/work.bin";
         LOG_INFO("Decrypt layer: {}", output_path);
         if (!decrypt_install_nonpdrm(emuenv, licpath, output_path)) {
+            if (license_kind(licpath) == LicenseKind::account)
+                LOG_ERROR("{} [{}]: its licence is the PSN account's own, as a Vita keeps it with a game it installed. "
+                          "Its key works only on that Vita, so the files can't be decrypted here. Make a NoNpDrm dump: "
+                          "with the NoNpDrm plugin loaded, start the game once on the Vita, and it writes a licence "
+                          "that works anywhere to ux0:nonpdrm/license/ (app/{} for the game, addcont/{}/<add-on> for "
+                          "an add-on). Copy that license folder next to app/ and patch/ in the dump, or give the .rif "
+                          "as the game's licence",
+                    emuenv.app_info.app_title, emuenv.app_info.app_title_id, emuenv.app_info.app_title_id,
+                    emuenv.app_info.app_title_id);
             LOG_ERROR("NoNpDrm installation failed, deleting data!");
             fs::remove_all(output_path);
             return false;
@@ -130,11 +161,38 @@ static DumpLicenseDirs dump_license_dirs(const EmuEnvState &emuenv) {
     return {};
 }
 
-// Without a work.bin in the installed content: the licence a zip keeps beside it, written as its work.bin.
+// The content's work.bin is usable or missing: false when it is an account's licence (a folder copied
+// from a Vita's ux0:app), which a NoNpDrm licence beside the content then replaces.
+static bool keep_work_bin(const fs::path &work_bin) {
+    if (!fs::exists(work_bin))
+        return false;
+    if (license_kind(work_bin) != LicenseKind::account)
+        return true;
+    LOG_WARN("{}: the PSN account's licence, usable only on the Vita it came from; looking for a NoNpDrm licence "
+             "beside the dump",
+        work_bin);
+    return false;
+}
+
+// The game's licence given with the dump (--license, --zrif): its work.bin, in place of the dump's own.
+static void take_given_license(EmuEnvState &emuenv, const fs::path &license, const fs::path &output_path) {
+    if (license.empty() || !emuenv.app_info.app_category.starts_with("gd"))
+        return;
+    const auto work_bin = output_path / "sce_sys/package/work.bin";
+    boost::system::error_code ec;
+    fs::create_directories(work_bin.parent_path(), ec);
+    fs::copy_file(license, work_bin, fs::copy_options::overwrite_existing, ec);
+    if (ec)
+        LOG_ERROR("Licence {} could not be copied: {}", license, ec.message());
+    else
+        LOG_INFO("Licence: {} (given with the dump)", license);
+}
+
+// Without a usable work.bin in the installed content: the licence a zip keeps beside it, written as its work.bin.
 static void take_zip_dump_license(EmuEnvState &emuenv, const ZipPtr &zip, const std::string &content_path, const fs::path &output_path) {
     const auto dirs = dump_license_dirs(emuenv);
     const auto work_bin = output_path / "sce_sys/package/work.bin";
-    if (dirs.license.empty() || fs::exists(work_bin) || !content_path.ends_with(dirs.content))
+    if (dirs.license.empty() || !content_path.ends_with(dirs.content) || keep_work_bin(work_bin))
         return;
     const auto prefix = content_path.substr(0, content_path.size() - dirs.content.size()) + dirs.license;
     const mz_uint num_files = mz_zip_reader_get_num_files(zip.get());
@@ -157,7 +215,7 @@ static void take_zip_dump_license(EmuEnvState &emuenv, const ZipPtr &zip, const 
 static void take_folder_dump_license(EmuEnvState &emuenv, const fs::path &content_path, const fs::path &dst_path) {
     const auto dirs = dump_license_dirs(emuenv);
     const auto work_bin = dst_path / "sce_sys/package/work.bin";
-    if (dirs.license.empty() || fs::exists(work_bin))
+    if (dirs.license.empty() || keep_work_bin(work_bin))
         return;
     // the dump's root: up one folder per part of dirs.content (addcont/<title>/<dir>/ or app/<title>/)
     fs::path root = content_path;
@@ -259,7 +317,31 @@ static void set_theme_name(EmuEnvState &emuenv, const vfs::FileBuffer &buffer, c
     }
 }
 
-static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, const std::string &content_path, const std::function<void(ArchiveContents)> &progress_callback, const ReinstallCallback &reinstall_callback) {
+// A dump's contents in the order they install in: the game, then its update, then the rest (add-ons,
+// themes). An update before its game fails ("Install app before patch"), and a folder's or zip's own order
+// is arbitrary: Linux lists a folder in its file system's order, which put patch/ before app/ (ss-delta #13).
+template <typename Content, typename ReadSfo>
+static void sort_contents(std::vector<Content> &contents, const ReadSfo &read_sfo) {
+    std::vector<std::pair<int, Content>> ranked;
+    for (const auto &content : contents) {
+        const vfs::FileBuffer sfo = read_sfo(content);
+        int rank = 2;
+        if (!sfo.empty()) {
+            sfo::SfoAppInfo info;
+            sfo::get_param_info(info, sfo, 0);
+            if (info.app_category.starts_with("gd"))
+                rank = 0;
+            else if (info.app_category.starts_with("gp"))
+                rank = 1;
+        }
+        ranked.emplace_back(rank, content);
+    }
+    std::stable_sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+    for (size_t i = 0; i < ranked.size(); i++)
+        contents[i] = ranked[i].second;
+}
+
+static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, const std::string &content_path, const std::function<void(ArchiveContents)> &progress_callback, const ReinstallCallback &reinstall_callback, const fs::path &license) {
     std::string sfo_path = "sce_sys/param.sfo";
     std::string theme_path = "theme.xml";
     vfs::FileBuffer buffer, theme;
@@ -323,6 +405,7 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
         }
     }
 
+    take_given_license(emuenv, license, output_path);
     take_zip_dump_license(emuenv, zip, content_path, output_path);
     if (fs::exists(output_path / "sce_sys/package/") && emuenv.app_info.app_title_id.starts_with("PCS")) {
         update_progress();
@@ -374,7 +457,7 @@ static std::vector<std::string> get_archive_contents_path(const ZipPtr &zip) {
     return content_path;
 }
 
-std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &archive_path, const std::function<void(ArchiveContents)> &progress_callback, const ReinstallCallback &reinstall_callback) {
+std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &archive_path, const std::function<void(ArchiveContents)> &progress_callback, const ReinstallCallback &reinstall_callback, const fs::path &license) {
     if (string_utils::tolower(archive_path.extension().string()) == ".vci") {
         const auto vci_progress = [&](float pct) {
             if (progress_callback)
@@ -401,11 +484,17 @@ std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &ar
         return {};
     }
 
-    const auto content_path = get_archive_contents_path(zip);
+    auto content_path = get_archive_contents_path(zip);
     if (content_path.empty()) {
         fclose(vpk_fp);
         return {};
     }
+    sort_contents(content_path, [&zip](const std::string &content) {
+        vfs::FileBuffer sfo;
+        if (!mz_zip_reader_extract_file_to_callback(zip.get(), (content + "sce_sys/param.sfo").c_str(), &write_to_buffer, &sfo, 0))
+            sfo.clear();
+        return sfo;
+    });
 
     const auto count = static_cast<float>(content_path.size());
     float current = 0.f;
@@ -419,7 +508,7 @@ std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &ar
     for (auto &path : content_path) {
         current++;
         update_progress();
-        bool state = install_archive_content(emuenv, zip, path, progress_callback, reinstall_callback);
+        bool state = install_archive_content(emuenv, zip, path, progress_callback, reinstall_callback, license);
         // Can't use emplace_back due to Clang 15 for macos
         content_installed.push_back({ emuenv.app_info.app_title, emuenv.app_info.app_title_id, emuenv.app_info.app_category, emuenv.app_info.app_content_id, path, state });
     }
@@ -441,10 +530,15 @@ static std::vector<fs::path> get_contents_path(const fs::path &path) {
         }
     }
 
+    sort_contents(contents_path, [](const fs::path &content) {
+        vfs::FileBuffer sfo;
+        fs_utils::read_data(content / "sce_sys/param.sfo", sfo);
+        return sfo;
+    });
     return contents_path;
 }
 
-static bool install_content(EmuEnvState &emuenv, const fs::path &content_path) {
+static bool install_content(EmuEnvState &emuenv, const fs::path &content_path, const fs::path &license) {
     const auto sfo_path{ content_path / "sce_sys/param.sfo" };
     const auto theme_path{ content_path / "theme.xml" };
     vfs::FileBuffer buffer;
@@ -472,6 +566,7 @@ static bool install_content(EmuEnvState &emuenv, const fs::path &content_path) {
         return false;
     }
 
+    take_given_license(emuenv, license, dst_path);
     take_folder_dump_license(emuenv, content_path, dst_path);
     if (fs::exists(dst_path / "sce_sys/package/") && !is_nonpdrm(emuenv, dst_path))
         return false;
@@ -485,14 +580,16 @@ static bool install_content(EmuEnvState &emuenv, const fs::path &content_path) {
     return true;
 }
 
-uint32_t install_contents(EmuEnvState &emuenv, const fs::path &path) {
+uint32_t install_contents(EmuEnvState &emuenv, const fs::path &path, const fs::path &license, uint32_t *found) {
     const auto src_path = get_contents_path(path);
+    if (found)
+        *found = static_cast<uint32_t>(src_path.size());
 
     LOG_WARN_IF(src_path.empty(), "No found any content compatible on this path: {}", path);
 
     uint32_t installed = 0;
     for (const auto &src : src_path) {
-        if (install_content(emuenv, src))
+        if (install_content(emuenv, src, license))
             ++installed;
     }
 

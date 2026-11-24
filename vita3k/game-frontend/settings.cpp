@@ -387,6 +387,8 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
     }
     if (declared("debug.high_accuracy"))
         out.high_accuracy = values.get_bool("debug.high_accuracy");
+    if (declared("debug.framebuffer_reads"))
+        out.framebuffer_reads = values.get("debug.framebuffer_reads");
     if (declared("debug.gpu"))
         out.gpu = values.get_int("debug.gpu");
     if (declared("debug.gpu_driver"))
@@ -543,6 +545,9 @@ IniSection debug(const std::string &id) {
                 "latent: none waits, the CPU reads a frame-old copy. off: no copy (effects may break)." },
             { "high_accuracy", Kind::Bool, "true", 0, 0, {},
                 "Vita3K's high-accuracy rendering (steady smoke). Off is faster but can flicker." },
+            { "framebuffer_reads", Kind::Choice, "auto", 0, 0, { "auto", "subpass", "subpass_storage", "copy" },
+                "How smoke, fire and fog read the picture on a graphics card without shader interlock (the log's\n"
+                "\"Framebuffer reads:\" line says \"no, no\"): auto (copy), subpass (as in 0.5.1), subpass_storage, copy." },
             { "gpu", Kind::Int, "0", 0, 16, {},
                 fmt::format("The graphics card: 0 picks one (a dedicated card first); N, the Nth of the\n"
                             "\"Vulkan devices\" {}/vita3k.log lists (for a laptop that starts on the wrong one).", id) },

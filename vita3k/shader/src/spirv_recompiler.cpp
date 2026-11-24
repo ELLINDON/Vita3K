@@ -745,7 +745,26 @@ static void create_fragment_inputs(spv::Builder &b, SpirvShaderParameters &param
             }
         };
 
-        if (features.direct_fragcolor && (translation_state.is_vulkan || translation_state.is_target_glsl)) {
+        if (features.direct_fragcolor && features.fetch_from_copy && translation_state.is_vulkan) {
+            // a copy of the colour surface made before the draw (FeatureState::fetch_from_copy): the texel at this
+            // fragment's position, from a sampled image in the format of the colour attachment's view (so an sRGB
+            // surface is decoded as the subpass input decodes it)
+            const spv::Id image_type = b.makeImageType(f32, spv::Dim2D, false, false, false, 1, spv::ImageFormatUnknown);
+            const spv::Id fetch_copy = b.createVariable(precision, spv::StorageClassUniformConstant, image_type, "fetch_copy");
+            b.addDecoration(fetch_copy, spv::DecorationBinding, 0);
+            b.addDecoration(fetch_copy, spv::DecorationDescriptorSet, 1);
+
+            const spv::Id i32 = b.makeIntegerType(32, true);
+            spv::Id coord = b.createUnaryOp(spv::OpConvertFToS, b.makeVectorType(i32, 4), b.createLoad(current_coord, spv::NoPrecision));
+            coord = b.createOp(spv::OpVectorShuffle, b.makeVectorType(i32, 2), { { true, coord }, { true, coord }, { false, 0 }, { false, 1 } });
+
+            spv::Builder::TextureParameters params{};
+            params.sampler = b.createLoad(fetch_copy, spv::NoPrecision);
+            params.coords = coord;
+            params.lod = b.makeIntConstant(0);
+            source = b.createTextureCall(precision, v4, false, true, false, false, false, params, spv::ImageOperandsMaskNone);
+            b.setPrecision(source, precision);
+        } else if (features.direct_fragcolor && (translation_state.is_vulkan || translation_state.is_target_glsl)) {
             // The GPU supports gl_LastFragData.
             // On Vulkan this is a subpass input, it is similar to gl_LastFragData (and should have the same speed on integrated GPUs)
             // This is not supported on OpenGL with SpirV

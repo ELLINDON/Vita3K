@@ -21,7 +21,10 @@
 #include <renderer/types.h>
 #include <shader/uniform_block.h>
 #include <vkutil/objects.h>
+#include <map>
+#include <memory>
 #include <optional>
+#include <tuple>
 
 struct MemState;
 
@@ -316,6 +319,16 @@ struct VKContext : public renderer::Context {
     vk::Format current_color_format;
     vk::ImageView current_color_view;
     vk::ImageView current_ds_view;
+
+    // FeatureState::fetch_from_copy: the images shaders read the framebuffer from, one per colour surface size and
+    // view format (kept for the context's life), and the current scene's
+    std::map<std::tuple<uint32_t, uint32_t, vk::Format, vk::Format>, std::unique_ptr<vkutil::Image>> fetch_copies;
+    vkutil::Image *current_fetch_copy = nullptr;
+    // the copy for the current scene's colour surface, made (and put in the general layout) when first needed
+    vkutil::Image &retrieve_fetch_copy();
+    // in a render pass: the colour surface's pixels inside rect copied into current_fetch_copy, for the next draw
+    // (ends the render pass and starts it again, loading the attachments)
+    void copy_for_fetch(const vk::Rect2D &rect);
 
     bool is_recording = false;
     // FeatureState::depth_store_scenes: the depth-stencil surface of the current scene, to put back at its end

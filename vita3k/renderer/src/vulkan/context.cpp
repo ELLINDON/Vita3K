@@ -360,8 +360,8 @@ void set_context(VKContext &context, MemState &mem, VKRenderTarget *rt, const Fe
         force_load = false;
         force_store = false;
     }
-    if (context.state.features.support_shader_interlock)
-        // we must always store the depth stencil
+    if (context.state.features.support_shader_interlock || context.state.features.fetch_from_copy)
+        // we must always store the depth stencil (the render pass may be restarted in the scene)
         force_store = true;
     context.current_render_pass = context.state.pipeline_cache.retrieve_render_pass(vk_format, force_load, force_store, color_surface_fin == nullptr);
     if (context.state.features.support_shader_interlock)
@@ -495,7 +495,9 @@ static vk::DescriptorSet retrieve_color_descriptor(VKState &state, FrameDescript
     // we have no more frame descriptor available, create a bunch of new one for this specific layout
     // the type depends on the way we read it
     vk::DescriptorPoolSize pool_size{
-        .type = state.features.support_shader_interlock ? vk::DescriptorType::eStorageImage : vk::DescriptorType::eInputAttachment,
+        .type = state.features.support_shader_interlock ? vk::DescriptorType::eStorageImage
+            : state.features.fetch_from_copy            ? vk::DescriptorType::eSampledImage
+                                                        : vk::DescriptorType::eInputAttachment,
         .descriptorCount = DESCRIPTOR_PACK_SIZE * MAX_FRAMES_RENDERING
     };
 
@@ -587,8 +589,14 @@ void VKContext::start_render_pass(bool create_descriptor_set) {
         .imageView = state.features.support_shader_interlock ? current_color_storage_view : current_color_view,
         .imageLayout = vk::ImageLayout::eGeneral,
     };
+    if (state.features.fetch_from_copy) {
+        current_fetch_copy = &retrieve_fetch_copy();
+        descr_color_info.imageView = current_fetch_copy->view;
+    }
 
-    const vk::DescriptorType input_type = state.features.support_shader_interlock ? vk::DescriptorType::eStorageImage : vk::DescriptorType::eInputAttachment;
+    const vk::DescriptorType input_type = state.features.support_shader_interlock ? vk::DescriptorType::eStorageImage
+        : state.features.fetch_from_copy                                           ? vk::DescriptorType::eSampledImage
+                                                                                   : vk::DescriptorType::eInputAttachment;
     vk::WriteDescriptorSet write_descr{
         .dstSet = rendertarget_set,
         .dstBinding = 0,
@@ -597,6 +605,79 @@ void VKContext::start_render_pass(bool create_descriptor_set) {
     };
     write_descr.setImageInfo(descr_color_info);
     state.device.updateDescriptorSets(write_descr, {});
+}
+
+vkutil::Image &VKContext::retrieve_fetch_copy() {
+    const vkutil::Image &base = *current_color_base_image;
+    const auto key = std::make_tuple(base.width, base.height, base.format, current_color_format);
+    auto &slot = fetch_copies[key];
+    if (!slot) {
+        // in the colour attachment view's format, so it decodes as that view (copying between the size-compatible
+        // formats of the surface and its view is allowed)
+        slot = std::make_unique<vkutil::Image>(base.width, base.height, current_color_format);
+        slot->init_image(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst);
+        const vk::ImageMemoryBarrier to_general{
+            .srcAccessMask = vk::AccessFlags(),
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite | vk::AccessFlagBits::eShaderRead,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = slot->image,
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        prerender_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlags(), {}, {}, to_general);
+        LOG_INFO("Framebuffer reads: a copy image of {}x{} ({})", base.width, base.height, vk::to_string(current_color_format));
+    }
+    return *slot;
+}
+
+void VKContext::copy_for_fetch(const vk::Rect2D &rect) {
+    // clamped to both images (the copy has the surface's size)
+    const uint32_t x0 = std::min<uint32_t>(std::max(rect.offset.x, 0), current_fetch_copy->width);
+    const uint32_t y0 = std::min<uint32_t>(std::max(rect.offset.y, 0), current_fetch_copy->height);
+    const uint32_t x1 = std::min<uint32_t>(x0 + rect.extent.width, current_fetch_copy->width);
+    const uint32_t y1 = std::min<uint32_t>(y0 + rect.extent.height, current_fetch_copy->height);
+    if (x1 <= x0 || y1 <= y0)
+        return;
+
+    // a copy can't happen inside a render pass; an occlusion query can't outlive one (the next draw begins it again)
+    if (is_in_query) {
+        render_cmd.endQuery(current_visibility_buffer->query_pool, current_query_idx);
+        is_in_query = false;
+    }
+    render_cmd.endRenderPass();
+
+    // the colour surface's writes before the copy reads it, the shader reads of the last copy before it's overwritten
+    const vk::MemoryBarrier before{
+        .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eShaderRead,
+        .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite
+    };
+    render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
+        vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlags(), before, {}, {});
+
+    const vk::ImageCopy region{
+        .srcSubresource = vk::ImageSubresourceLayers{ .aspectMask = vk::ImageAspectFlagBits::eColor, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
+        .srcOffset = { static_cast<int32_t>(x0), static_cast<int32_t>(y0), 0 },
+        .dstSubresource = vk::ImageSubresourceLayers{ .aspectMask = vk::ImageAspectFlagBits::eColor, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
+        .dstOffset = { static_cast<int32_t>(x0), static_cast<int32_t>(y0), 0 },
+        .extent = { x1 - x0, y1 - y0, 1 }
+    };
+    render_cmd.copyImage(current_color_base_image->image, vk::ImageLayout::eGeneral, current_fetch_copy->image, vk::ImageLayout::eGeneral, region);
+
+    // the copy before the fragment shaders read it; the copy's read of the surface before the draws write it again
+    const vk::MemoryBarrier after{
+        .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+        .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite
+    };
+    render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::DependencyFlags(), after, {}, {});
+
+    curr_renderpass_info.renderPass = current_render_pass;
+    curr_renderpass_info.framebuffer = current_framebuffer;
+    render_cmd.beginRenderPass(curr_renderpass_info, vk::SubpassContents::eInline);
+    gpu_trace(*this, fmt::format("copy for framebuffer reads: {}x{} at {},{}", x1 - x0, y1 - y0, x0, y0));
 }
 
 void VKContext::stop_render_pass() {

@@ -435,7 +435,10 @@ SurfaceRetrieveResult VKSurfaceCache::retrieve_color_surface_for_framebuffer(Mem
     }
 
     vk::ImageUsageFlags surface_usages = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eInputAttachment;
-    if (state.features.support_shader_interlock)
+    // shader interlock reads the surface as a storage image; [debug] framebuffer_reads = subpass_storage asks for the
+    // usage too (when the format allows it), which keeps AMD's colour compression off the surface
+    if (state.features.support_shader_interlock
+        || (state.fb_reads_storage && (state.physical_device.getFormatProperties(image.format).optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage)))
         surface_usages |= vk::ImageUsageFlagBits::eStorage;
     image.init_image(surface_usages, vkutil::default_comp_mapping, image_create_flags, image_info_pNext);
 

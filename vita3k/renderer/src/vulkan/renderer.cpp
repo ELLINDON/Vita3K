@@ -965,6 +965,24 @@ void VKState::late_init(const Config &cfg, const std::string_view game_id, MemSt
         // We use subpass input to get something similar to direct fragcolor access (there is no difference for the shader)
         features.direct_fragcolor = true;
         features.support_shader_interlock = false;
+        // Without raster-order attachment access, the subpass input isn't coherent: on some drivers a draw then reads
+        // pixels its own or earlier draws haven't written yet, and smoke and fog come out in blocks of stale pixels
+        // (ss-delta #17, a Radeon R5 on AMD's legacy driver; Qualcomm's Adreno driver), which no barrier inside the
+        // render pass, nor a new render pass per triangle, fixed on the Adreno. VITA3K_FB_READS (the single-game front
+        // end's [debug] framebuffer_reads) chooses, with high accuracy: auto or copy, the shaders read a copy of the
+        // colour surface made before each draw that reads it; subpass, the subpass input; subpass_storage, the subpass
+        // input with colour surfaces that are also storage images (which keeps AMD's colour compression off them: a
+        // hypothesis for the 8x8 blocks on GCN)
+        if (!support_rasterized_order_access && use_high_accuracy) {
+            const char *env = std::getenv("VITA3K_FB_READS");
+            const std::string mode = env && *env ? env : "auto";
+            features.fetch_from_copy = mode == "auto" || mode == "copy";
+            fb_reads_storage = mode == "subpass_storage";
+            LOG_INFO("Framebuffer reads ({}): {}", mode,
+                features.fetch_from_copy ? "from a copy of the colour surface"
+                    : fb_reads_storage   ? "subpass input, colour surfaces with storage usage"
+                                         : "subpass input");
+        }
     }
 
     // texture viewport is faster but not entirely accurate

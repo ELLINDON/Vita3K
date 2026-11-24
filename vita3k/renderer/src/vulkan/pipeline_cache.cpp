@@ -124,7 +124,8 @@ void PipelineCache::init(bool support_rasterized_order_access) {
         std::array<vk::DescriptorSetLayoutBinding, 2> layout_binding;
         const vk::DescriptorType intput_image_descriptor = state.features.support_shader_interlock
             ? vk::DescriptorType::eStorageImage
-            : vk::DescriptorType::eInputAttachment;
+            : state.features.fetch_from_copy ? vk::DescriptorType::eSampledImage
+                                             : vk::DescriptorType::eInputAttachment;
         layout_binding[0] = vk::DescriptorSetLayoutBinding{
             .binding = 0,
             .descriptorType = intput_image_descriptor,

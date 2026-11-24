@@ -574,7 +574,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
 
     // when we do multiple render pass for one scene (shader interlock or slow macroblock),
     // we need to always load the depth-stencil after the first draw
-    if (context.is_first_scene_draw && (context.state.features.support_shader_interlock || context.ignore_macroblock)) {
+    if (context.is_first_scene_draw && (context.state.features.support_shader_interlock || context.state.features.fetch_from_copy || context.ignore_macroblock)) {
         // update the render pass to load and store the depth and stencil
         context.current_render_pass = context.state.pipeline_cache.retrieve_render_pass(context.current_color_format, true, true, !context.record.color_surface.data);
         context.is_first_scene_draw = false;
@@ -582,7 +582,30 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
 
     const SceGxmFragmentProgram &gxm_fragment_program = *context.record.fragment_program.get(mem);
     const SceGxmProgram &fragment_program_gxp = *gxm_fragment_program.program.get(mem);
-    if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
+    // FeatureState::fetch_from_copy: the draw reads the colour surface from a copy made now, so particles that overlap
+    // within one draw each blend with the surface as it was before the draw (they don't add up). Debugging aid:
+    // VITA3K_FB_FETCH_PARTS=<n> draws a triangle list in up to n parts of whole quads with a copy before each (closer,
+    // slower: a copy per part; 16 parts cost about a third of the frame rate on an Adreno 740)
+    static const uint32_t fetch_parts = [] {
+        const char *v = std::getenv("VITA3K_FB_FETCH_PARTS");
+        return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+    }();
+    const bool fetch_copy = context.state.features.fetch_from_copy && fragment_program_gxp.is_frag_color_used();
+    uint32_t part_indices = 0;
+    if (fetch_copy && fetch_parts > 1 && type == SCE_GXM_PRIMITIVE_TRIANGLES && instance_count == 1)
+        part_indices = ((static_cast<uint32_t>(count) / 6 + fetch_parts - 1) / fetch_parts) * 6;
+    const bool split_draw = part_indices > 0 && count > part_indices;
+    // the pixels the draw can touch: its scissor (copy_for_fetch clamps it to the surface). VITA3K_FB_FETCH_WHOLE=1: the
+    // whole surface (debugging aid)
+    static const bool fetch_whole = [] {
+        const char *v = std::getenv("VITA3K_FB_FETCH_WHOLE");
+        return v && v[0] == '1';
+    }();
+    const vk::Rect2D fetch_rect = fetch_whole ? vk::Rect2D{ { 0, 0 }, { context.current_color_base_image->width, context.current_color_base_image->height } }
+                                              : context.scissor;
+    if (fetch_copy) {
+        context.copy_for_fetch(fetch_rect);
+    } else if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
         // the fragment shader is using programmable blending with a subpass input
         vk::ImageMemoryBarrier barrier{
             .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
@@ -964,7 +987,15 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
             }
         }
     }
-    context.render_cmd.drawIndexed(count, instance_count, 0, 0, 0);
+    if (split_draw) {
+        const uint32_t part = part_indices;
+        for (uint32_t first = 0; first < count; first += part) {
+            if (first > 0)
+                context.copy_for_fetch(fetch_rect);
+            context.render_cmd.drawIndexed(std::min<uint32_t>(part, static_cast<uint32_t>(count) - first), 1, first, 0, 0);
+        }
+    } else
+        context.render_cmd.drawIndexed(count, instance_count, 0, 0, 0);
     if (trace_this_vertex_shader(context, mem)) {
         trace_vs_line(context, fmt::format("    draw {} indices x{}, query {} in {}, object {}", count, instance_count, context.is_in_query ? context.current_query_idx : -1,
                                    context.current_visibility_buffer ? log_hex(context.current_visibility_buffer->address) : std::string("none"), traced_object_id & 0xFFFF));

@@ -115,6 +115,8 @@ struct VKState : public renderer::State {
     // support for the VK_KHR_uniform_buffer_standard_layout extension, needed for memory mapping and texture viewport
     bool support_standard_layout = false;
     bool support_rasterized_order_access = false;
+    // [debug] framebuffer_reads = subpass_storage: colour surfaces get the storage usage without shader interlock
+    bool fb_reads_storage = false;
     LinuxSurfaceType linux_surface_type = LinuxSurfaceType::Unknown;
 
 #ifdef __ANDROID__

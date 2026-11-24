@@ -693,6 +693,9 @@ int run(Profile &profile, int argc, char *argv[]) {
     cfg.backend_renderer = "Vulkan";
     cfg.high_accuracy = settings.high_accuracy;
     cfg.gpu_idx = settings.gpu;
+    // [debug] framebuffer_reads, read by the Vulkan renderer (ss-delta #17); an environment value set by hand wins
+    if (!std::getenv("VITA3K_FB_READS"))
+        set_env("VITA3K_FB_READS", settings.framebuffer_reads);
     cfg.disable_surface_sync = settings.surface_sync == 3;
     cfg.memory_mapping = "double-buffer";
 #ifdef __ANDROID__

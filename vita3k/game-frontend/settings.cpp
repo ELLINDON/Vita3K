@@ -611,9 +611,14 @@ IniSection mouse() {
                 "800 dpi). The camera turns at most as fast as with the stick fully pushed, so a flick faster\n"
                 "than that turns less than it asks." },
             { "invert_y", Kind::Bool, "false", 0, 0, {}, "Moving the mouse up turns the camera down." },
+            { "hide_cursor", Kind::Bool, "true", 0, 0, {},
+                "Hide the cursor when the mouse has been still for 3 seconds, and at once when a key or a gamepad\n"
+                "is used; moving the mouse or clicking shows it again. Off: the cursor always shows (except\n"
+                "while the mouse camera has it)." },
         } };
     s.settings[0].title = "Mouse camera";
     s.settings[3].title = "Invert vertical";
+    s.settings[4].title = "Hide idle cursor";
     for (auto &spec : s.settings) {
         spec.live = true;
         spec.desktop_only = true;

@@ -899,6 +899,35 @@ int run(Profile &profile, int argc, char *argv[]) {
     };
     configure_mouse(true);
     const auto mouse_camera_on = [&] { return has_mouse_camera && settings.values.get_bool("mouse.camera"); };
+    // [mouse] hide_cursor (on in a game without [mouse]): the cursor hides once the mouse has been
+    // still for a few seconds, or at once on a key or gamepad input, and shows again when the mouse
+    // moves or clicks. Apart from the mouse camera's capture, which hides it as well (issue #16)
+    bool cursor_hidden = false;
+    auto last_mouse_use = std::chrono::steady_clock::now();
+    const auto hide_cursor_on = [&] {
+#ifdef __ANDROID__
+        return false;
+#else
+        return !settings.values.values.contains("mouse.hide_cursor") || settings.values.get_bool("mouse.hide_cursor");
+#endif
+    };
+    const auto set_cursor_hidden = [&](bool hide) {
+        if (hide == cursor_hidden)
+            return;
+        cursor_hidden = hide;
+        if (hide)
+            SDL_HideCursor();
+        else
+            SDL_ShowCursor();
+    };
+    const auto mouse_used = [&] {
+        last_mouse_use = std::chrono::steady_clock::now();
+        set_cursor_hidden(false);
+    };
+    const auto other_input_used = [&] {
+        if (hide_cursor_on())
+            set_cursor_hidden(true);
+    };
     // The settings menu (settings_menu.h): F1, or Select held for a second on a gamepad, opens it
     // over the paused game; F1, Esc or Circle closes it, and its Exit page quits the game. Its changes
     // are written to the settings file here, on the main thread, and the live ones applied.
@@ -939,8 +968,11 @@ int run(Profile &profile, int argc, char *argv[]) {
             emuenv.renderer->set_screen_filter(change.value);
         else if (key == "audio.volume")
             emuenv.audio.set_global_volume(std::clamp(std::atoi(change.value.c_str()), 0, 100) / 100.f);
-        else if (change.section == "mouse")
+        else if (change.section == "mouse") {
             configure_mouse(false);
+            if (!hide_cursor_on())
+                set_cursor_hidden(false);
+        }
 #ifdef __ANDROID__
         else if (change.section == "controls")
             configure_screen_controls();
@@ -1029,6 +1061,7 @@ int run(Profile &profile, int argc, char *argv[]) {
         case SDL_EVENT_KEY_DOWN:
             if (event.key.repeat)
                 break;
+            other_input_used();
             if (mouse_camera_on() && !menu
                 && std::find(capture_keys.begin(), capture_keys.end(), key_from_scancode(event.key.scancode)) != capture_keys.end()) {
                 // the capture key captures or releases the cursor, and is no Vita button then
@@ -1062,6 +1095,8 @@ int run(Profile &profile, int argc, char *argv[]) {
             keyboard.key(emuenv, event.key.scancode, false);
             break;
         case SDL_EVENT_MOUSE_MOTION:
+            if (event.motion.xrel != 0 || event.motion.yrel != 0)
+                mouse_used();
             if (captured)
                 mouse_camera.motion(event.motion.xrel, event.motion.yrel);
             else
@@ -1070,6 +1105,7 @@ int run(Profile &profile, int argc, char *argv[]) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            mouse_used();
             if (event.button.button == SDL_BUTTON_MIDDLE && down && mouse_camera_on() && !menu)
                 capture_wanted = !capture_wanted;
             // the captured cursor touches nothing: it is hidden, and stays where it was captured
@@ -1082,6 +1118,19 @@ int run(Profile &profile, int argc, char *argv[]) {
                 touch.mouse_button_right = down;
             break;
         }
+        case SDL_EVENT_MOUSE_WHEEL:
+            mouse_used();
+            break;
+        // a gamepad hides the cursor while the window has the focus (the cursor is the whole desktop's)
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            if (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS)
+                other_input_used();
+            break;
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+            // past a quarter of the way, so a resting stick's drift doesn't count
+            if (std::abs(event.gaxis.value) > 8192 && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS))
+                other_input_used();
+            break;
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
             touch.renderer_focused = true;
             break;
@@ -1234,6 +1283,10 @@ int run(Profile &profile, int argc, char *argv[]) {
                 mouse_camera.motion(dx, dy);
             mouse_camera.update(emuenv, SDL_GetTicksNS());
         }
+        // the idle cursor hides while the window has the focus
+        if (window && !cursor_hidden && hide_cursor_on() && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS)
+            && std::chrono::steady_clock::now() - last_mouse_use >= std::chrono::seconds(3))
+            set_cursor_hidden(true);
         // typed text reaches the game's keyboard dialogs (a player name) only while SDL's text
         // input is on; the session handles Enter, Backspace and Escape itself
         if (window) {

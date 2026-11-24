@@ -171,7 +171,8 @@ IniSection debug(const std::string &id);
 IniSection keyboard(const std::string &extra_help = {});
 IniSection gamepad();
 // [mouse]: the mouse camera (input.h MouseCamera), for a game whose right stick turns the camera; the
-// frontend captures the cursor only in a game whose layout has it
+// frontend captures the cursor only in a game whose layout has it. Its hide_cursor (the idle cursor
+// hides) is on in a game without the section
 IniSection mouse();
 // the [touch] section, with a game's default bindings as lines of `body`
 IniSection touch(const std::string &body);

@@ -752,6 +752,13 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             support_fsr = static_cast<bool>(props.get<vk::PhysicalDeviceShaderFloat16Int8Features>().shaderFloat16);
         }
 
+        // debugging: the path of GPUs with neither raster-order attachment access nor shader interlock
+        // (Qualcomm's driver, maybe others), the framebuffer read through non-coherent subpass input
+        if (const char *off = std::getenv("VITA3K_NO_ORDERED_FB_READS"); off && *off && *off != '0') {
+            LOG_WARN("VITA3K_NO_ORDERED_FB_READS: raster-order attachment access and shader interlock left unused");
+            support_rasterized_order_access = false;
+            support_shader_interlock = false;
+        }
         if (support_rasterized_order_access) {
             auto props = physical_device.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>();
             support_rasterized_order_access = static_cast<bool>(props.get<vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>().rasterizationOrderColorAttachmentAccess);

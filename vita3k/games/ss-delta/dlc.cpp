@@ -130,7 +130,9 @@ std::optional<std::vector<std::string>> read_lines(const fs::path &app_dir, cons
 // The original game's pre-order "Spirits'" offerings (ss-delta docs/decisions.md D29). Delta keeps
 // every row they need commented out (a ';' before the row) in its own tables; [game]
 // spirits_offerings switches them on with a packaged mod made here from the installed game's own
-// archives (nothing of the original game is needed): those rows appended without the ';', with
+// archives (nothing of the original game is needed): those rows appended without the ';' (with the
+// continuation rows that follow them; GitHub issue #19: without the throws' four "投擲準備" rows the
+// Spirit arrows had no arrows), with
 //   * the two fang arms' punch-effect skill (1601001, 1601101), which Delta removed, set to 0, as on
 //     Delta's own fang arms;
 //   * the fang arms' punch motions (chara_motion_combo_param.csv, rows Delta left active), which
@@ -143,7 +145,7 @@ std::optional<std::vector<std::string>> read_lines(const fs::path &app_dir, cons
 namespace {
 
 constexpr const char *SPIRITS_ID = "spirits-offerings";
-constexpr const char *SPIRITS_VERSION = "2";
+constexpr const char *SPIRITS_VERSION = "3";
 constexpr const char *SPIRITS_ARCHIVE = "resource/data/pack/mount/retail/archive_patch3";
 
 struct SpiritTable {
@@ -303,17 +305,26 @@ bool make_spirits_package(const fs::path &app_dir, const fs::path &dir, std::str
             return false;
         }
         const std::regex row(std::string("^") + t.pattern);
+        // each row with the rows after it that have no ID (continuation rows: in
+        // magic_eff_pack_param_ply.csv a pack's further effects, e.g. one per arrow of a throw).
+        // Delta commented out only the first row of each, so the continuation rows stayed as they were
         std::vector<std::string> rows;
-        for (const auto &l : *table) {
+        size_t found = 0;
+        for (size_t i = 0; i < table->size(); i++) {
+            const auto &l = (*table)[i];
             if (std::regex_search(l, row)) {
                 why = std::string(t.member) + " has them switched on already";
                 return false;
             }
-            if (l.size() > 1 && l[0] == ';' && std::regex_search(l.substr(1), row))
+            if (l.size() > 1 && l[0] == ';' && std::regex_search(l.substr(1), row)) {
                 rows.push_back(l.substr(1));
+                found++;
+                for (size_t j = i + 1; j < table->size() && (*table)[j].starts_with(','); j++)
+                    rows.push_back((*table)[j]);
+            }
         }
-        if (rows.size() != t.rows) {
-            why = fmt::format("{} has {} of the commented-out rows, not the {} of Delta 1.30", t.member, rows.size(), t.rows);
+        if (found != t.rows) {
+            why = fmt::format("{} has {} of the commented-out rows, not the {} of Delta 1.30", t.member, found, t.rows);
             return false;
         }
         const std::string member = t.member;
@@ -324,7 +335,8 @@ bool make_spirits_package(const fs::path &app_dir, const fs::path &dir, std::str
         std::set<std::string> ids;
         for (const auto &r : rows) {
             lines += r + "\r\n";
-            ids.insert(r.substr(0, r.find(',') + 1));
+            if (!r.starts_with(','))
+                ids.insert(r.substr(0, r.find(',') + 1));
         }
         for (const auto &id : ids)
             conflicts += fmt::format("{}\"{}\"", conflicts.empty() ? "" : ", ", id);

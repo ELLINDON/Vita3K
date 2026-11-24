@@ -133,6 +133,9 @@ std::optional<std::vector<std::string>> read_lines(const fs::path &app_dir, cons
 // archives (nothing of the original game is needed): those rows appended without the ';', with
 //   * the two fang arms' punch-effect skill (1601001, 1601101), which Delta removed, set to 0, as on
 //     Delta's own fang arms;
+//   * the fang arms' punch motions (chara_motion_combo_param.csv, rows Delta left active), which
+//     still name those removed skills: pointed at the arms' damage skill (1601003, 1601103), as
+//     Delta's own fang arms' punches are (GitHub issue #18: the thrust crashed or missed);
 //   * the falcon columns of arms rows that have 0 there taken from Delta's arm of the same model, as
 //     the Spirit swords already have them;
 //   * Spirits' Falconfeather (601800), "test" in Delta's western item text, named as in the original.
@@ -140,7 +143,7 @@ std::optional<std::vector<std::string>> read_lines(const fs::path &app_dir, cons
 namespace {
 
 constexpr const char *SPIRITS_ID = "spirits-offerings";
-constexpr const char *SPIRITS_VERSION = "1";
+constexpr const char *SPIRITS_VERSION = "2";
 constexpr const char *SPIRITS_ARCHIVE = "resource/data/pack/mount/retail/archive_patch3";
 
 struct SpiritTable {
@@ -161,6 +164,13 @@ constexpr std::array<SpiritTable, 9> SPIRIT_TABLES{ {
 } };
 // arms_param.csv columns: model, falcon motion, falcon pierce skill, derived skills (normal, greed)
 constexpr size_t ARMS_MODEL = 3, ARMS_FALCON_MOTION = 8, ARMS_PIERCE = 16, ARMS_DERIVED_NORMAL = 17, ARMS_DERIVED_GREED = 18;
+// the fang arms' punch rows in chara_motion_combo_param.csv (motion, branch, level, skill, param),
+// as Delta 1.30 has them, and as they are made
+constexpr const char *COMBO_MEMBER = "resource/boot/chara_motion_combo_param.csv";
+const std::array<std::pair<const char *, const char *>, 2> COMBO_FIXES{ {
+    { "CH_ATD01_01_M,,1,1601001,1601001,", "CH_ATD01_01_M,,1,1601003,1601003," },
+    { "CH_ATIW01_01_M,,1,1601101,1601101,", "CH_ATIW01_01_M,,1,1601103,1601103," },
+} };
 // the original's names of Spirits' Falconfeather in the western languages (Delta's say "test")
 constexpr uint32_t FALCONFEATHER = 601800;
 const std::array<std::pair<const char *, const char *>, 7> FALCONFEATHER_NAMES{ {
@@ -218,6 +228,25 @@ void fix_arms(std::vector<std::string> &rows, const std::vector<std::string> &ta
         }
         row = join(c, ',');
     }
+}
+
+// chara_motion_combo_param.csv with the fang arms' punch rows fixed (COMBO_FIXES); false when the
+// table doesn't have them as Delta 1.30 does
+bool fixed_combo_table(const fs::path &retail, std::string &out) {
+    std::optional<std::vector<uint8_t>> data;
+    for (const char *archive : { "archive_patch3", "archive" })
+        if ((data = read_member(retail / archive, COMBO_MEMBER)))
+            break;
+    if (!data)
+        return false;
+    out.assign(data->begin(), data->end());
+    for (const auto &[from, to] : COMBO_FIXES) {
+        const size_t at = out.find(from);
+        if (at == std::string::npos || (at != 0 && out[at - 1] != '\n') || out.find(from, at + 1) != std::string::npos)
+            return false;
+        out.replace(at, std::strlen(from), to);
+    }
+    return true;
 }
 
 // an item text table (UTF-16 LE with a BOM, tab-separated, CRLF) with one item's name replaced;
@@ -307,6 +336,15 @@ bool make_spirits_package(const fs::path &app_dir, const fs::path &dir, std::str
             appends.empty() ? "" : ",", member, name, conflicts);
     }
     const fs::path retail = app_dir / "resource" / "data" / "pack" / "mount" / "retail";
+    std::string combo;
+    if (!fixed_combo_table(retail, combo)) {
+        why = std::string(COMBO_MEMBER) + " lacks the fang arms' punch rows of Delta 1.30";
+        return false;
+    }
+    if (!write_bytes(dir / "files" / fs_utils::utf8_to_path(COMBO_MEMBER), combo)) {
+        why = std::string("could not write ") + COMBO_MEMBER;
+        return false;
+    }
     for (const auto &[lang, name] : FALCONFEATHER_NAMES) {
         const std::string member = fmt::format("resource/boot/{0}/item_param_text_{0}.msgt", lang);
         std::optional<std::vector<uint8_t>> data;

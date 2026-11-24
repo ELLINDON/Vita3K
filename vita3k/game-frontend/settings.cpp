@@ -387,6 +387,8 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
     }
     if (declared("debug.high_accuracy"))
         out.high_accuracy = values.get_bool("debug.high_accuracy");
+    if (declared("debug.gpu"))
+        out.gpu = values.get_int("debug.gpu");
     if (declared("debug.gpu_driver"))
         out.gpu_driver = values.get("debug.gpu_driver");
     out.keyboard = values.section("keyboard");
@@ -541,6 +543,9 @@ IniSection debug(const std::string &id) {
                 "latent: none waits, the CPU reads a frame-old copy. off: no copy (effects may break)." },
             { "high_accuracy", Kind::Bool, "true", 0, 0, {},
                 "Vita3K's high-accuracy rendering (steady smoke). Off is faster but can flicker." },
+            { "gpu", Kind::Int, "0", 0, 16, {},
+                fmt::format("The graphics card: 0 picks one (a dedicated card first); N, the Nth of the\n"
+                            "\"Vulkan devices\" {}/vita3k.log lists (for a laptop that starts on the wrong one).", id) },
 #ifdef __ANDROID__
             { "gpu_driver", Kind::Text, "auto", 0, 0, {},
                 "The Vulkan driver: auto (the driver package installed last from drivers/, such as the Turnip\n"

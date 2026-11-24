@@ -540,6 +540,16 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     // Select Physical Device
     {
         std::vector<vk::PhysicalDevice> physical_devices = instance.enumeratePhysicalDevices();
+        // every device Vulkan offers, numbered as [debug] gpu takes them (a laptop's second GPU missing
+        // here was never offered to the game: ss-delta #17)
+        for (size_t i = 0; i < physical_devices.size(); i++) {
+            const auto props = physical_devices[i].getProperties();
+            LOG_INFO("Vulkan devices: {} {} ({}, Vulkan {}.{}{})", i + 1, props.deviceName.data(), vk::to_string(props.deviceType),
+                VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion),
+                device_is_compatible(physical_devices[i]) ? "" : ", not usable");
+        }
+        if (gpu_idx > physical_devices.size())
+            LOG_WARN("Vulkan devices: there is no device {} ([debug] gpu): choosing one", gpu_idx);
 
         if (gpu_idx > 0 && gpu_idx <= physical_devices.size()) {
             // force choose the gpu

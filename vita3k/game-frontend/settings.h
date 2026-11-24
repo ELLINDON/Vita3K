@@ -119,6 +119,7 @@ struct Settings {
     bool validation_layer = false;
     int surface_sync = 0; // 0 exact, 1 targeted, 2 latent (renderer::State::surface_sync_wait), 3 off
     bool high_accuracy = true;
+    int gpu = 0; // 0: Vita3K's choice (a discrete GPU first); N: the Nth Vulkan device the log lists
     std::string gpu_driver = "auto"; // Android: auto, system, or a libadrenotools package in the app's files/driver/
     // [keyboard] and [gamepad]: Vita button -> keys / gamepad button, applied by input.cpp
     std::map<std::string, std::string> keyboard, gamepad;

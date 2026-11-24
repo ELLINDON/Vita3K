@@ -692,6 +692,7 @@ int run(Profile &profile, int argc, char *argv[]) {
     // [debug] surface_sync and high_accuracy, or a game's configure hook, can change them
     cfg.backend_renderer = "Vulkan";
     cfg.high_accuracy = settings.high_accuracy;
+    cfg.gpu_idx = settings.gpu;
     cfg.disable_surface_sync = settings.surface_sync == 3;
     cfg.memory_mapping = "double-buffer";
 #ifdef __ANDROID__

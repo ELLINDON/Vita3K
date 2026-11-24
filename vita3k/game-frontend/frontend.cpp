@@ -324,8 +324,10 @@ your own dump of the game, then the game starts. Everything stays in the game's 
                               build the game from this dump without the importer's window (repeat
                               for its update, add-ons and rePatch mods; also --dump=<path>), then
                               play. With the game built, add-ons and mods alone are installed,
-                              without building again
-  --build-only                build the game if it isn't (or with --install, --dump), then quit
+                              without building again; the same dump it was built from: nothing
+                              to do (a launcher's setup step run again)
+  --rebuild                   with --dump: build again even from the same dump
+  --build-only               build the game if it isn't (or with --install, --dump), then quit
                               instead of playing (exit code 0: built)
   --add-to-steam              Linux and the Steam Deck: add the game to Steam (Steam must be
                               running), then quit
@@ -382,6 +384,8 @@ int run(Profile &profile, int argc, char *argv[]) {
         const auto eq = arg.find('=');
         const std::string key = eq == std::string::npos ? std::string() : arg.substr(0, eq);
         if (key == "--dump" || key == "--license" || key == "--zrif") {
+            if (eq + 1 == arg.size())
+                continue; // an empty value: nothing chosen (else it would name the current folder)
             ctx.args.push_back(key);
             ctx.args.push_back(arg.substr(eq + 1));
         } else
@@ -424,7 +428,7 @@ int run(Profile &profile, int argc, char *argv[]) {
             (arg == "--license" ? install_content.back().license : install_content.back().zrif) = ctx.args[++i];
         else if (arg == "--install")
             open_importer = true;
-        else if (arg == "--accept-microsoft-license" || arg == "--shortcut" || arg == "--steam" || arg == "--progress")
+        else if (arg == "--accept-microsoft-license" || arg == "--shortcut" || arg == "--steam" || arg == "--progress" || arg == "--rebuild")
             importer_options.push_back(arg);
         else if ((arg == "--cache" || arg == "--jobs" || arg == "--offline" || arg == "--for") && has_value)
             importer_options.insert(importer_options.end(), { arg, arg == "--cache" || arg == "--offline" ? fs_utils::path_to_utf8(fs::absolute(fs_utils::utf8_to_path(ctx.args[i + 1]))) : ctx.args[i + 1] }), i++;

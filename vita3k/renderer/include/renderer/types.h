@@ -27,6 +27,7 @@
 #include <array>
 #include <bitset>
 #include <map>
+#include <optional>
 #include <vector>
 
 static constexpr auto DEFAULT_RES_WIDTH = 960;
@@ -189,7 +190,22 @@ struct ShaderProgram {
 };
 
 struct FragmentProgram : ShaderProgram {
+    // FeatureState::native_shader_blend: the blend its final SOP2 does with the old pixel, left to the fixed-function
+    // blender (the program is translated without its read of the framebuffer; shader::find_shader_blend)
+    std::optional<shader::ShaderBlend> native_blend;
 };
+
+// the hash a program translated with Hints::native_blend is cached under (in memory and on disk), apart from its
+// translation with the read of the framebuffer
+inline Sha256Hash native_blend_hash(Sha256Hash hash) {
+    hash[31] ^= 0xB1;
+    return hash;
+}
+
+// does a fragment program read the framebuffer? (not when its blend is left to the fixed-function blender)
+inline bool reads_framebuffer(const SceGxmProgram &program, const FragmentProgram &renderer_data) {
+    return program.is_frag_color_used() && !renderer_data.native_blend;
+}
 
 struct VertexProgram : ShaderProgram {
     shader::usse::AttributeInformationMap attribute_infos;

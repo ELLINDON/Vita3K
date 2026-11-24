@@ -21,6 +21,7 @@ struct FeatureState {
     bool support_shader_interlock = false; ///< First option for blending. Using this with ordered execution mode.
     bool support_texture_barrier = false; ///< Second option for blending. Slower but work on 3 vendors.
     bool direct_fragcolor = false;
+    bool native_shader_blend = false; ///< Fragment programs whose read of the framebuffer serves only a final SOP2 blend are translated without it, the blend left to the fixed-function blender (shader::find_shader_blend; ss-delta #17)
     bool fetch_from_copy = false; ///< With direct_fragcolor but without coherent framebuffer reads (no raster-order attachment access): shaders read the framebuffer from a copy made before each draw that reads it, not through a subpass input (ss-delta #17)
     bool spirv_shader = false;
     bool support_get_texture_sub_image = false;

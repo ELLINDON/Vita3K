@@ -31,6 +31,20 @@ namespace shader::usse {
 
 struct USSERecompiler;
 
+// find_shader_blend's record of a translation (this thread's): active, every access of the output register is counted,
+// except a final SOP2's in the blend form (old pixel in, result out, both the output register), whose blend is kept;
+// native, such a SOP2 writes its colour as it is (the program has no read of the framebuffer)
+struct ShaderBlendScan {
+    bool active = false;
+    bool native = false;
+    bool in_blend_sop2 = false;
+    int output_access = 0;
+    int sop2_count = 0;
+    int blend_sop2_count = 0;
+    ShaderBlend blend{};
+};
+extern thread_local ShaderBlendScan shader_blend_scan;
+
 class USSETranslatorVisitor final {
 public:
     using instruction_return_type = bool;

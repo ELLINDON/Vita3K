@@ -306,6 +306,68 @@ bool create(std::unique_ptr<FragmentProgram> &fp, VKState &state, const SceGxmPr
         };
     }
 
+    // a program that reads the framebuffer only for a final SOP2 blend (FeatureState::native_shader_blend): that blend,
+    // done by the fixed-function blender, and no read (ss-delta #17)
+    // VITA3K_SHADER_BLEND_ONLY=<hash prefix>,...: only these programs (debugging aid)
+    static const std::string blend_only = [] {
+        const char *v = std::getenv("VITA3K_SHADER_BLEND_ONLY");
+        return std::string(v ? v : "");
+    }();
+    const auto listed = [&]() {
+        if (blend_only.empty())
+            return true;
+        const std::string text = hex_string(sha256(&program, program.size));
+        for (size_t start = 0; start <= blend_only.size();) {
+            const size_t end = std::min(blend_only.find(',', start), blend_only.size());
+            if (end > start && text.rfind(blend_only.substr(start, end - start), 0) == 0)
+                return true;
+            start = end + 1;
+        }
+        return false;
+    };
+    if (state.features.native_shader_blend && program.is_frag_color_used() && !fp_vk->blending.blendEnable && listed()) {
+        if (const auto blend = shader::find_shader_blend(program, state.features)) {
+            using BF = vk::BlendFactor;
+            // a SOP2 selector names src1 or src2 (as a colour or its alpha); the program's colour is Vulkan's source,
+            // the old pixel its destination
+            const bool swapped = blend->swapped;
+            const auto factor = [swapped](bool of_src1, bool alpha, bool complement) {
+                const bool source = of_src1 != swapped; // the colour (Vulkan's source)?
+                if (alpha)
+                    return source ? (complement ? BF::eOneMinusSrcAlpha : BF::eSrcAlpha) : (complement ? BF::eOneMinusDstAlpha : BF::eDstAlpha);
+                return source ? (complement ? BF::eOneMinusSrcColor : BF::eSrcColor) : (complement ? BF::eOneMinusDstColor : BF::eDstColor);
+            };
+            const auto color_factor = [&](uint8_t sel, bool complement) {
+                switch (sel) {
+                case 1: return factor(true, false, complement);
+                case 2: return factor(false, false, complement);
+                case 3: return factor(true, true, complement);
+                case 4: return factor(false, true, complement);
+                default: return complement ? BF::eOne : BF::eZero;
+                }
+            };
+            const auto alpha_factor = [&](uint8_t sel, bool complement) {
+                switch (sel) {
+                case 1: return factor(true, true, complement);
+                case 2: return factor(false, true, complement);
+                default: return complement ? BF::eOne : BF::eZero;
+                }
+            };
+            // factor1 applies to src1, factor2 to src2; subtract is src1 minus src2
+            const BF c1 = color_factor(blend->csel1, blend->cmod1), c2 = color_factor(blend->csel2, blend->cmod2);
+            const BF a1 = alpha_factor(blend->asel1, blend->amod1), a2 = alpha_factor(blend->asel2, blend->amod2);
+            const vk::BlendOp subtract = swapped ? vk::BlendOp::eReverseSubtract : vk::BlendOp::eSubtract;
+            fp_vk->blending.blendEnable = VK_TRUE;
+            fp_vk->blending.srcColorBlendFactor = swapped ? c2 : c1;
+            fp_vk->blending.dstColorBlendFactor = swapped ? c1 : c2;
+            fp_vk->blending.colorBlendOp = blend->cop == 0 ? vk::BlendOp::eAdd : subtract;
+            fp_vk->blending.srcAlphaBlendFactor = swapped ? a2 : a1;
+            fp_vk->blending.dstAlphaBlendFactor = swapped ? a1 : a2;
+            fp_vk->blending.alphaBlendOp = blend->aop == 0 ? vk::BlendOp::eAdd : subtract;
+            fp_vk->native_blend = blend;
+        }
+    }
+
     // compute blending hash, as it will be used for the pipeline hash
     fp_vk->blending_hash = XXH_INLINE_XXH3_64bits(&fp_vk->blending, sizeof(vk::PipelineColorBlendAttachmentState));
     return true;

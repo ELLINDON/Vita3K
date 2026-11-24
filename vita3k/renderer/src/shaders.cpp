@@ -163,7 +163,8 @@ static R load_shader_generic(const fs::path &shader_path) {
 
 static shader::GeneratedShader load_shader_generic(shader::Target target, const SceGxmProgram &program, const FeatureState &features, const shader::Hints &hints, bool maskupdate, const fs::path &shader_cache_path, const fs::path &shaderlog_path, const char *shader_type_str, const std::string &shader_version, bool shader_cache, bool write_cache = true) {
     // TODO: no need to recompute the hash here
-    const std::string hash_text = hex_string(get_shader_hash(program));
+    // (a fragment program translated without its read of the framebuffer has a hash of its own: native_blend_hash)
+    const std::string hash_text = hex_string(hints.native_blend ? native_blend_hash(get_shader_hash(program)) : get_shader_hash(program));
     // Set Shader Hash with Version
     const std::string hash_hex_ver = fmt::format("{}-{}", shader_version, hash_text);
     const auto get_shader_path = [&](const char *ext) {

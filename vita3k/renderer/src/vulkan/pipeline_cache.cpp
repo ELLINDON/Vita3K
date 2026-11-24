@@ -481,7 +481,7 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
     const vk::SpecializationInfo *spec_info = nullptr;
     if (!is_vertex) {
         // the shader has the specialization constants (is_srgb and the blend only with shader interlock)
-        const bool interlock = state.features.should_use_shader_interlock() && program->is_frag_color_used();
+        const bool interlock = state.features.should_use_shader_interlock() && program->is_frag_color_used() && !hints.native_blend;
         FragmentSpecValues values{ (interlock && is_srgb) ? vk::True : vk::False, is_u2f10f10f10 ? vk::True : vk::False, vk::False, 0, 0, 0, 0, 0, 0, 0xF };
         if (interlock && blending) {
             values[2] = blending->blendEnable ? vk::True : vk::False;
@@ -885,7 +885,10 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     const vk::PipelineVertexInputStateCreateInfo vertex_input = get_vertex_input_state(vertex_program_gxm, mem);
 
     const vk::PipelineShaderStageCreateInfo vertex_shader = retrieve_shader(vertex_program_gxm.program.get(mem), vertex_program.hash, true, fragment_program_gxm.is_maskupdate, mem, hints);
-    const vk::PipelineShaderStageCreateInfo fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, fragment_program_gxm.is_maskupdate, mem, hints, record.is_gamma_corrected,
+    // a program whose blend the fixed-function blender does is translated without its read of the framebuffer
+    shader::Hints fragment_hints = hints;
+    fragment_hints.native_blend = fragment_program.native_blend ? &*fragment_program.native_blend : nullptr;
+    const vk::PipelineShaderStageCreateInfo fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, fragment_program_gxm.is_maskupdate, mem, fragment_hints, record.is_gamma_corrected,
         record.color_base_format == SCE_GXM_COLOR_BASE_FORMAT_U2F10F10F10, &fragment_program.blending);
     const vk::PipelineShaderStageCreateInfo shader_stages[] = { vertex_shader, fragment_shader };
     // disable the fragment shader if gxm asks us to
@@ -898,7 +901,7 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
 
     const bool two_sided = (record.two_sided == SCE_GXM_TWO_SIDED_ENABLED);
 
-    const bool use_shader_interlock = state.features.support_shader_interlock && gxm_fragment_shader->is_frag_color_used();
+    const bool use_shader_interlock = state.features.support_shader_interlock && reads_framebuffer(*gxm_fragment_shader, fragment_program);
 
     const vk::PipelineRasterizationStateCreateInfo rasterizer{
         // the PS Vita clamps depth below 0 instead of clipping (the shader recompiler leaves it to this)
@@ -926,7 +929,7 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     };
 
     vk::PipelineColorBlendStateCreateInfo color_blending{};
-    if (support_coherent_framebuffer_fetch && gxm_fragment_shader->is_frag_color_used())
+    if (support_coherent_framebuffer_fetch && reads_framebuffer(*gxm_fragment_shader, fragment_program))
         color_blending.flags = vk::PipelineColorBlendStateCreateFlagBits::eRasterizationOrderAttachmentAccessEXT;
 
     const bool frag_has_no_output = static_cast<bool>(gxm_fragment_shader->program_flags & SCE_GXM_PROGRAM_FLAG_OUTPUT_UNDEFINED);
@@ -1031,7 +1034,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
 
     // get the correct renderpass here
     const SceGxmProgram *gxm_fragment_shader = fragment_program_gxm.program.get(mem);
-    const bool use_shader_interlock = state.features.support_shader_interlock && gxm_fragment_shader->is_frag_color_used();
+    const bool use_shader_interlock = state.features.support_shader_interlock && reads_framebuffer(*gxm_fragment_shader, fragment_program);
     const vk::RenderPass render_pass = use_shader_interlock ? context.current_shader_interlock_pass : context.current_render_pass;
     // update the shader hints
     context.shader_hints.color_format = record.color_surface.colorFormat;

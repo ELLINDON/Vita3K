@@ -120,6 +120,7 @@ struct Settings {
     int surface_sync = 0; // 0 exact, 1 targeted, 2 latent (renderer::State::surface_sync_wait), 3 off
     bool high_accuracy = true;
     std::string framebuffer_reads = "auto"; // auto, subpass, subpass_storage, copy (renderer: VITA3K_FB_READS)
+    std::string shader_blend = "auto"; // auto, on, off (renderer: VITA3K_SHADER_BLEND unset, 1, 0)
     int gpu = 0; // 0: Vita3K's choice (a discrete GPU first); N: the Nth Vulkan device the log lists
     std::string gpu_driver = "auto"; // Android: auto, system, or a libadrenotools package in the app's files/driver/
     // [keyboard] and [gamepad]: Vita button -> keys / gamepad button, applied by input.cpp

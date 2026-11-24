@@ -26,6 +26,7 @@
 #include <gxm/types.h>
 #include <shader/gxp_parser.h>
 #include <shader/usse_translator_entry.h>
+#include <shader/usse_translator.h>
 #include <shader/usse_translator_types.h>
 #include <util/fs.h>
 #include <util/log.h>
@@ -117,7 +118,14 @@ struct TranslationState {
     bool is_vulkan = false;
     spv::ImageFormat image_storage_format = spv::ImageFormat::ImageFormatUnknown;
     const Hints *hints = nullptr;
+    // Hints::native_blend: no read of the framebuffer, the final SOP2 writes the colour as it is
+    bool native_blend = false;
 };
+
+// does the translated program read the framebuffer? (not when its blend is left to the fixed-function blender)
+static bool reads_frag_color(const SceGxmProgram &program, const TranslationState &translation_state) {
+    return program.is_frag_color_used() && !translation_state.native_blend;
+}
 
 struct VertexProgramOutputProperties {
     std::string name;
@@ -711,7 +719,7 @@ static void create_fragment_inputs(spv::Builder &b, SpirvShaderParameters &param
         }
     }
 
-    if (program.is_frag_color_used()) {
+    if (reads_frag_color(program, translation_state)) {
         // There might be a chance that this shader also reads from OUTPUT bank. We will load last state frag data
         spv::Id source = spv::NoResult;
 
@@ -1149,14 +1157,14 @@ static SpirvShaderParameters create_parameters(spv::Builder &b, const SceGxmProg
         if (translation_state.is_vulkan)
             b.addDecoration(translation_state.render_info_id, spv::DecorationDescriptorSet, 0);
 
-        if (program.is_frag_color_used() && features.should_use_shader_interlock() && translation_state.is_vulkan) {
+        if (reads_frag_color(program, translation_state) && features.should_use_shader_interlock() && translation_state.is_vulkan) {
             // specialization constant for shader interlock:
             // layout (constant_id = GAMMA_CORRECTION_SPECIALIZATION_ID) const bool is_srgb = false;
             spv_params.is_srgb_constant = b.makeBoolConstant(false, true);
             b.addDecoration(spv_params.is_srgb_constant, spv::DecorationSpecId, (int)GAMMA_CORRECTION_SPECIALIZATION_ID);
             b.addName(spv_params.is_srgb_constant, "is_srgb");
         }
-        if (program.is_frag_color_used() && features.should_use_shader_interlock() && translation_state.is_vulkan) {
+        if (reads_frag_color(program, translation_state) && features.should_use_shader_interlock() && translation_state.is_vulkan) {
             // layout (constant_id = BLEND_*_SPECIALIZATION_ID) const ... = ...;
             static const char *const names[8] = { "blend_enable", "blend_color_src", "blend_color_dst", "blend_color_op",
                 "blend_alpha_src", "blend_alpha_dst", "blend_alpha_op", "color_mask" };
@@ -1570,7 +1578,7 @@ static spv::Function *make_frag_finalize_function(spv::Builder &b, const SpirvSh
     }
 
     // shader interlock: the fixed-function blend and colour mask the pipeline would apply
-    if (parameters.interlock_dst && program.is_frag_color_used() && features.should_use_shader_interlock()) {
+    if (parameters.interlock_dst && reads_frag_color(program, translate_state) && features.should_use_shader_interlock()) {
         const spv::Id f32 = b.makeFloatType(32);
         const spv::Id u32 = b.makeUintType(32);
         const spv::Id v4 = b.makeVectorType(f32, 4);
@@ -1672,7 +1680,7 @@ static spv::Function *make_frag_finalize_function(spv::Builder &b, const SpirvSh
         color = b.createTriOp(spv::OpSelect, v4, cond, stored, color);
     }
 
-    if (program.is_frag_color_used() && features.should_use_shader_interlock()) {
+    if (reads_frag_color(program, translate_state) && features.should_use_shader_interlock()) {
         spv::Id signed_i32 = b.makeIntType(32);
         spv::Id coord_id = b.createLoad(translate_state.frag_coord_id, spv::NoPrecision);
         spv::Id translated_id = b.createUnaryOp(spv::OpConvertFToS, b.makeVectorType(signed_i32, 4), coord_id);
@@ -2100,7 +2108,7 @@ static SpirvCode convert_gxp_to_spirv_impl(const SceGxmProgram &program, const s
         else
             b.addExecutionMode(spv_func_main, spv::ExecutionModeOriginLowerLeft);
 
-        if (program.is_frag_color_used() && features.should_use_shader_interlock()) {
+        if (reads_frag_color(program, translation_state) && features.should_use_shader_interlock()) {
             b.addExecutionMode(spv_func_main, spv::ExecutionModeSampleInterlockOrderedEXT);
             b.addExecutionMode(spv_func_main, spv::ExecutionModeEarlyFragmentTests);
             b.addExtension("SPV_EXT_fragment_shader_interlock");
@@ -2314,6 +2322,7 @@ GeneratedShader convert_gxp(const SceGxmProgram &program, const std::string &sha
     translation_state.is_target_glsl = (target == Target::GLSLOpenGL);
     translation_state.is_vulkan = (target == Target::SpirVVulkan);
     translation_state.hints = &hints;
+    translation_state.native_blend = translation_state.is_fragment && !maskupdate && hints.native_blend != nullptr;
 
     if (!features.support_unknown_format) {
         // take the color format of the current surface, hoping the shader is not used on two surfaces with different formats (this should be the case)
@@ -2321,7 +2330,10 @@ GeneratedShader convert_gxp(const SceGxmProgram &program, const std::string &sha
     }
 
     GeneratedShader shader{};
+    usse::shader_blend_scan = {};
+    usse::shader_blend_scan.native = translation_state.native_blend;
     shader.spirv = convert_gxp_to_spirv_impl(program, shader_hash, features, translation_state, force_shader_debug, dumper);
+    usse::shader_blend_scan = {};
 
     if (translation_state.is_target_glsl) {
         // also generate the glsl file
@@ -2342,6 +2354,28 @@ GeneratedShader convert_gxp(const SceGxmProgram &program, const std::string &sha
     }
 
     return shader;
+}
+
+std::optional<ShaderBlend> find_shader_blend(const SceGxmProgram &program, const FeatureState &features) {
+    if (!program.is_fragment() || !program.is_frag_color_used())
+        return std::nullopt;
+
+    // the program translated as usual (the result thrown away), counting what it does with the output register
+    Hints hints{};
+    TranslationState translation_state;
+    translation_state.is_fragment = true;
+    translation_state.is_vulkan = true;
+    translation_state.hints = &hints;
+    usse::shader_blend_scan = {};
+    usse::shader_blend_scan.active = true;
+    convert_gxp_to_spirv_impl(program, "shader-blend-scan", features, translation_state, false, nullptr);
+    const usse::ShaderBlendScan scan = usse::shader_blend_scan;
+    usse::shader_blend_scan = {};
+
+    // one SOP2, in the blend form, and nothing else touches the output register
+    if (scan.sop2_count != 1 || scan.blend_sop2_count != 1 || scan.output_access != 0)
+        return std::nullopt;
+    return scan.blend;
 }
 
 void convert_gxp_to_glsl_from_filepath(const std::string &shader_filepath_utf8) {

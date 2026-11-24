@@ -27,11 +27,17 @@
 using namespace shader;
 using namespace usse;
 
+thread_local ShaderBlendScan shader::usse::shader_blend_scan;
+
 spv::Id USSETranslatorVisitor::load(Operand op, const Imm4 dest_mask, const int shift_offset) {
+    if (shader_blend_scan.active && !shader_blend_scan.in_blend_sop2 && op.bank == RegisterBank::OUTPUT)
+        shader_blend_scan.output_access++;
     return utils::load(m_b, m_spirv_params, m_util_funcs, m_features, op, dest_mask, shift_offset);
 }
 
 void USSETranslatorVisitor::store(Operand dest, spv::Id source, std::uint8_t dest_mask, int shift_offset) {
+    if (shader_blend_scan.active && !shader_blend_scan.in_blend_sop2 && dest.bank == RegisterBank::OUTPUT)
+        shader_blend_scan.output_access++;
     utils::store(m_b, m_spirv_params, m_util_funcs, m_features, dest, source, dest_mask, shift_offset);
 }
 

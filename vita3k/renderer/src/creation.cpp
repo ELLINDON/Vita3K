@@ -195,6 +195,14 @@ bool create(std::unique_ptr<FragmentProgram> &fp, State &state, const SceGxmProg
 
     // Try to hash this shader
     fp->hash = sha256(&program, program.size);
+    if (fp->native_blend) {
+        // translated without its read of the framebuffer: cached apart from that translation
+        const shader::ShaderBlend &nb = *fp->native_blend;
+        LOG_INFO("Fragment program {}: its blend by the fixed-function blender (colour sel {}{}/{}{} op {}, alpha sel {}{}/{}{} op {}{})",
+            hex_string(fp->hash).substr(0, 16), nb.cmod1 ? "1-" : "", nb.csel1, nb.cmod2 ? "1-" : "", nb.csel2, nb.cop,
+            nb.amod1 ? "1-" : "", nb.asel1, nb.amod2 ? "1-" : "", nb.asel2, nb.aop, nb.swapped ? "; the old pixel src1" : "");
+        fp->hash = native_blend_hash(fp->hash);
+    }
     gxp_ptr_map.emplace(fp->hash, &program);
 
     fp->buffer_count = shader::usse::get_uniform_buffer_sizes(program, fp->uniform_buffer_sizes);

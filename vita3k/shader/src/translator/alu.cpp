@@ -992,6 +992,57 @@ bool USSETranslatorVisitor::sop2(
         return spv::NoResult;
     };
 
+    // the blend form (find_shader_blend): the program's colour (src1, as it is) and the old pixel (src2, the output
+    // register) combined into the output register, once, added or subtracted, with factors a fixed-function blend has
+    // (or the other way round: the old pixel src1, the colour src2)
+    const auto is_old_pixel = [](const Operand &op) { return op.bank == RegisterBank::OUTPUT && op.num == 0; };
+    const bool blend_swapped = is_old_pixel(inst.opr.src1) && inst.opr.src2.bank != RegisterBank::OUTPUT;
+    const bool blend_form = pred == 0 && count == 0 && src1_mod == 0 && asrc1_mod == 0 && dest_mod == 0 && cop <= 1 && aop <= 1
+        && csel1 <= 4 && csel2 <= 4 && asel1 <= 2 && asel2 <= 2 && is_old_pixel(inst.opr.dest)
+        && ((is_old_pixel(inst.opr.src2) && inst.opr.src1.bank != RegisterBank::OUTPUT) || blend_swapped);
+    if (shader_blend_scan.active) {
+        shader_blend_scan.sop2_count++;
+        if (blend_form) {
+            shader_blend_scan.blend_sop2_count++;
+            shader_blend_scan.blend = ShaderBlend{
+                .csel1 = static_cast<uint8_t>(csel1),
+                .csel2 = static_cast<uint8_t>(csel2),
+                .asel1 = static_cast<uint8_t>(asel1),
+                .asel2 = static_cast<uint8_t>(asel2),
+                .cmod1 = cmod1 != 0,
+                .cmod2 = cmod2 != 0,
+                .amod1 = amod1 != 0,
+                .amod2 = amod2 != 0,
+                .cop = static_cast<uint8_t>(cop),
+                .aop = static_cast<uint8_t>(aop),
+                .swapped = blend_swapped
+            };
+        }
+    }
+    if (shader_blend_scan.native && blend_form) {
+        // the fixed-function blender does the rest: the colour goes out as it is
+        const Operand &colour_src = blend_swapped ? inst.opr.src2 : inst.opr.src1;
+        const spv::Id color = load(colour_src, 0b0111, 0);
+        const spv::Id alpha = load(colour_src, 0b1000, 0);
+        store(inst.opr.dest, color, 0b0111, 0);
+        store(inst.opr.dest, alpha, 0b1000, 0);
+        LOG_DISASM("{:016x}: SOP2 (the blend is the fixed-function blender's)", m_instr);
+        return true;
+    }
+    // its own accesses of the output register aren't counted
+    struct BlendSop2Scope {
+        bool on;
+        explicit BlendSop2Scope(bool on_)
+            : on(on_) {
+            if (on)
+                shader_blend_scan.in_blend_sop2 = true;
+        }
+        ~BlendSop2Scope() {
+            if (on)
+                shader_blend_scan.in_blend_sop2 = false;
+        }
+    } blend_sop2_scope(shader_blend_scan.active && blend_form);
+
     spv::Id uniform_1_alpha = spv::NoResult;
     spv::Id uniform_1_color = spv::NoResult;
 

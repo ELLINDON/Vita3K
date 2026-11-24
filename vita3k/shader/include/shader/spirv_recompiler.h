@@ -23,6 +23,8 @@
 
 #include <features/state.h>
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +71,20 @@ enum struct Target {
     SpirVVulkan
 };
 
+// A fragment program whose only use of the old pixel (the output register as the surface held it) is one final SOP2 that
+// blends the program's colour with it: the blend as its SOP2 encodes it, to be done by the fixed-function blender
+// instead of a read of the framebuffer (ss-delta #17). result = op(factor1 * src1, factor2 * src2), one source being the
+// program's colour and the other the old pixel (swapped: src1 is the old pixel)
+struct ShaderBlend {
+    uint8_t csel1 = 0; // colour factor of src1: 0 zero, 1 src1.rgb, 2 src2.rgb, 3 src1.a, 4 src2.a
+    uint8_t csel2 = 0; // colour factor of src2, the same values
+    uint8_t asel1 = 0; // alpha factor of src1: 0 zero, 1 src1.a, 2 src2.a
+    uint8_t asel2 = 0; // alpha factor of src2, the same values
+    bool cmod1 = false, cmod2 = false, amod1 = false, amod2 = false; // the factor's complement, 1 - factor
+    uint8_t cop = 0, aop = 0; // 0 add, 1 subtract (src1 minus src2)
+    bool swapped = false; // src1 is the old pixel, src2 the colour
+};
+
 // Hints given while compiling the shader
 // For example, the gxp shader knows at runtime the swizzle of the color surface
 // or the format / number of components of the sampled images, but we can't
@@ -85,6 +101,10 @@ struct Hints {
     // - when sampling, we need to know the component count of a texture
     SceGxmTextureFormat vertex_textures[SCE_GXM_MAX_TEXTURE_UNITS];
     SceGxmTextureFormat fragment_textures[SCE_GXM_MAX_TEXTURE_UNITS];
+
+    // a fragment program translated without its read of the framebuffer, its final SOP2 writing the colour as it is
+    // (find_shader_blend found this blend in it)
+    const ShaderBlend *native_blend = nullptr;
 };
 
 struct GeneratedShader {
@@ -100,5 +120,9 @@ GeneratedShader convert_gxp(const SceGxmProgram &program, const std::string &sha
     bool force_shader_debug = false, const std::function<bool(const std::string &ext, const std::string &dump)> &dumper = nullptr);
 
 void convert_gxp_to_glsl_from_filepath(const std::string &shader_filepath_utf8);
+
+// for a fragment program that reads the framebuffer: its blend, when that read serves only a final SOP2 blend of its
+// colour with the old pixel (the program is translated once to find out); nullopt otherwise
+std::optional<ShaderBlend> find_shader_blend(const SceGxmProgram &program, const FeatureState &features);
 
 } // namespace shader

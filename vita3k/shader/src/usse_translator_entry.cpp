@@ -1111,7 +1111,8 @@ void convert_gxp_usse_to_spirv(spv::Builder &b, const SceGxmProgram &program, co
     // Call end hook. If it's discard, this is not even called, so no worry
     b.createFunctionCall(end_hook_func, {});
 
-    if (features.should_use_shader_interlock() && program.is_fragment() && program.is_frag_color_used())
+    // (not in a program translated without its read of the framebuffer: Hints::native_blend)
+    if (features.should_use_shader_interlock() && program.is_fragment() && program.is_frag_color_used() && !shader_blend_scan.native)
         b.createNoResultOp(spv::OpEndInvocationInterlockEXT);
 
     if (recomp.visitor.frag_depth_id != 0) {

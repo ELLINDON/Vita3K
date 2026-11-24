@@ -973,6 +973,8 @@ void VKState::late_init(const Config &cfg, const std::string_view game_id, MemSt
         // colour surface made before each draw that reads it; subpass, the subpass input; subpass_storage, the subpass
         // input with colour surfaces that are also storage images (which keeps AMD's colour compression off them: a
         // hypothesis for the 8x8 blocks on GCN)
+        // the programs that read the framebuffer only to blend need no read at all
+        features.native_shader_blend = !support_rasterized_order_access;
         if (!support_rasterized_order_access && use_high_accuracy) {
             const char *env = std::getenv("VITA3K_FB_READS");
             const std::string mode = env && *env ? env : "auto";
@@ -984,6 +986,12 @@ void VKState::late_init(const Config &cfg, const std::string_view game_id, MemSt
                                          : "subpass input");
         }
     }
+
+    // VITA3K_SHADER_BLEND=1 or 0: the blend of such programs left to the fixed-function blender on every GPU, or never
+    if (const char *v = std::getenv("VITA3K_SHADER_BLEND"); v && (v[0] == '0' || v[0] == '1'))
+        features.native_shader_blend = v[0] == '1';
+    if (features.native_shader_blend)
+        LOG_INFO("Fragment programs that read the framebuffer only to blend: blended by the fixed-function blender");
 
     // texture viewport is faster but not entirely accurate
     if (support_standard_layout && !use_high_accuracy) {

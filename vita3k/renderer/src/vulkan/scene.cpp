@@ -582,6 +582,8 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
 
     const SceGxmFragmentProgram &gxm_fragment_program = *context.record.fragment_program.get(mem);
     const SceGxmProgram &fragment_program_gxp = *gxm_fragment_program.program.get(mem);
+    // the draw reads the framebuffer (not when the program's blend is left to the fixed-function blender)
+    const bool reads_fb = reads_framebuffer(fragment_program_gxp, *gxm_fragment_program.renderer_data);
     // FeatureState::fetch_from_copy: the draw reads the colour surface from a copy made now, so particles that overlap
     // within one draw each blend with the surface as it was before the draw (they don't add up). Debugging aid:
     // VITA3K_FB_FETCH_PARTS=<n> draws a triangle list in up to n parts of whole quads with a copy before each (closer,
@@ -590,7 +592,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
         const char *v = std::getenv("VITA3K_FB_FETCH_PARTS");
         return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
     }();
-    const bool fetch_copy = context.state.features.fetch_from_copy && fragment_program_gxp.is_frag_color_used();
+    const bool fetch_copy = context.state.features.fetch_from_copy && reads_fb;
     uint32_t part_indices = 0;
     if (fetch_copy && fetch_parts > 1 && type == SCE_GXM_PRIMITIVE_TRIANGLES && instance_count == 1)
         part_indices = ((static_cast<uint32_t>(count) / 6 + fetch_parts - 1) / fetch_parts) * 6;
@@ -604,8 +606,12 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     const vk::Rect2D fetch_rect = fetch_whole ? vk::Rect2D{ { 0, 0 }, { context.current_color_base_image->width, context.current_color_base_image->height } }
                                               : context.scissor;
     if (fetch_copy) {
+        // each program read from a copy, once (the ones whose blend the fixed-function blender couldn't take)
+        static std::set<Sha256Hash> copy_logged;
+        if (copy_logged.insert(gxm_fragment_program.renderer_data->hash).second)
+            LOG_INFO("Framebuffer read from a copy by fragment program {}", hex_string(gxm_fragment_program.renderer_data->hash).substr(0, 16));
         context.copy_for_fetch(fetch_rect);
-    } else if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
+    } else if (context.state.features.direct_fragcolor && reads_fb) {
         // the fragment shader is using programmable blending with a subpass input
         vk::ImageMemoryBarrier barrier{
             .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
@@ -621,7 +627,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
             vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
         gpu_trace(context, "barrier: colour attachment -> fragment shader (framebuffer fetch)");
     } else if (context.state.features.support_shader_interlock
-        && fragment_program_gxp.is_frag_color_used() != context.last_draw_was_framebuffer_fetch) {
+        && reads_fb != context.last_draw_was_framebuffer_fetch) {
         // restart the render pass to act as a barrier
         context.render_cmd.endRenderPass();
         gpu_trace(context, "end render pass (interlock switch)");
@@ -636,7 +642,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
         context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
             vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::DependencyFlags(), interlock_barrier, {}, {});
 
-        if (fragment_program_gxp.is_frag_color_used()) {
+        if (reads_fb) {
             context.curr_renderpass_info.framebuffer = context.current_shader_interlock_framebuffer;
             context.curr_renderpass_info.renderPass = context.current_shader_interlock_pass;
         } else {
@@ -646,7 +652,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
 
         context.render_cmd.beginRenderPass(context.curr_renderpass_info, vk::SubpassContents::eInline);
         gpu_trace(context, "begin render pass (interlock switch)");
-        context.last_draw_was_framebuffer_fetch = fragment_program_gxp.is_frag_color_used();
+        context.last_draw_was_framebuffer_fetch = reads_fb;
     }
 
     // VITA3K_NO_OCCLUSION_QUERIES=1: begin no occlusion query (to find whether queries hang the GPU);

@@ -161,6 +161,9 @@ void refresh_controllers(CtrlState &state, EmuEnvState &emuenv) {
 //   memdump <address> <size> <path>  the frontend writes guest memory there (address, size in hex)
 //   memwrite <address> <bytes>    the frontend writes the bytes (hex, e.g. 0000803f) to guest memory
 //   menu                          the frontend opens or closes its settings menu
+//   text <hex>                    the frontend types this UTF-8 text (hex bytes) into the game's open
+//                                 keyboard dialog, as typed keys would
+//   textsubmit                    the frontend presses Enter on that dialog
 //   mouse <dx> <dy>               relative mouse motion (mouse counts), as if the frontend's captured
 //                                 mouse moved (its mouse camera turns it into the right stick)
 // Buttons: cross circle square triangle up down left right l r l2 r2 l3 r3 start select.
@@ -244,6 +247,22 @@ static void apply_injected_command(CtrlState &state, const std::string &line) {
     } else if (command == "menu") {
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_menu_toggle = true;
+    } else if (command == "text") {
+        std::string hex, text;
+        words >> hex;
+        for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+            const auto digit = [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; };
+            if (!digit(hex[i]) || !digit(hex[i + 1])) {
+                LOG_WARN("Input pipe: text needs hex bytes (UTF-8), got '{}'", hex);
+                return;
+            }
+            text.push_back(static_cast<char>(std::stoul(hex.substr(i, 2), nullptr, 16)));
+        }
+        std::lock_guard<std::mutex> guard(state.mutex);
+        state.injected_texts.push_back(std::move(text));
+    } else if (command == "textsubmit") {
+        std::lock_guard<std::mutex> guard(state.mutex);
+        state.injected_text_submit = true;
     } else if (command == "mouse") {
         float dx = 0, dy = 0;
         words >> dx >> dy;

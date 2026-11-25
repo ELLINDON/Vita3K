@@ -95,6 +95,10 @@ struct CtrlState {
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> injected_memwrites;
     // the test driver asked to open or close a front end's settings menu
     bool injected_menu_toggle = false;
+    // UTF-8 text the test driver types into the game's keyboard dialog (the frontend commits it while one is
+    // open), and Enter pressed on that dialog after it
+    std::vector<std::string> injected_texts;
+    bool injected_text_submit = false;
     // (frame count, folder) recordings the test driver asked for
     std::vector<std::pair<int, std::string>> injected_records;
     // front-touch fingers the test driver holds, in 960x544 screen points (the frontend applies them)

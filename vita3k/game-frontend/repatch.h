@@ -38,6 +38,10 @@ namespace game_frontend {
 // as for a game whose regions are the same build. nullopt: `path` holds no rePatch folder.
 std::optional<bool> install_repatch(const fs::path &vita_fs, const fs::path &path, const std::vector<std::string> &title_ids);
 
+// A folder or zip that also holds the game's own content (app/, patch/ or addcont/<title ID>/), as a
+// dump that carries a rePatch mod beside the game does: install that content first, then the mod.
+bool holds_game_content(const fs::path &path);
+
 // The files of ux0/rePatch/<title_id>/ read in place of the game's own; returns how many. Files
 // the game doesn't have are not added (the game's folder listings wouldn't show them): logged.
 int apply_repatch(EmuEnvState &emuenv, const std::string &title_id);

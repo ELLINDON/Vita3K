@@ -199,6 +199,44 @@ std::optional<bool> install_repatch(const fs::path &vita_fs, const fs::path &pat
     return ok;
 }
 
+bool holds_game_content(const fs::path &path) {
+    static const std::regex content("(?:^|.*/)(?:app|patch|addcont)/[A-Z]{4}[0-9]{5}/.*",
+        std::regex::icase);
+    if (fs::is_directory(path)) {
+        boost::system::error_code ec;
+        for (fs::recursive_directory_iterator it(path, ec), end; !ec && it != end; it.increment(ec)) {
+            if (it.depth() > 2) {
+                it.disable_recursion_pending();
+                continue;
+            }
+            const std::string name = string_utils::tolower(fs_utils::path_to_utf8(it->path().filename()));
+            if (fs::is_directory(it->path()) && (name == "app" || name == "patch" || name == "addcont"))
+                return true;
+        }
+        return false;
+    }
+    FILE *fp = FOPEN(path.c_str(), "rb");
+    if (!fp)
+        return false;
+    mz_zip_archive zip;
+    std::memset(&zip, 0, sizeof(zip));
+    bool found = false;
+    if (mz_zip_reader_init_cfile(&zip, fp, 0, 0)) {
+        const mz_uint count = mz_zip_reader_get_num_files(&zip);
+        for (mz_uint i = 0; i < count && !found; i++) {
+            mz_zip_archive_file_stat stat;
+            if (!mz_zip_reader_file_stat(&zip, i, &stat))
+                continue;
+            std::string name = stat.m_filename;
+            string_utils::replace(name, "\\", "/");
+            found = std::regex_match(name, content);
+        }
+        mz_zip_reader_end(&zip);
+    }
+    fclose(fp);
+    return found;
+}
+
 int apply_repatch(EmuEnvState &emuenv, const std::string &title_id) {
     const fs::path root = emuenv.vita_fs_path / "ux0" / "rePatch" / title_id;
     const fs::path app = emuenv.vita_fs_path / "ux0" / "app" / title_id;

@@ -221,6 +221,8 @@ void KernelState::request_process_exit(int res, std::optional<AppLaunchRequest> 
 }
 
 void KernelState::process_exit() {
+    // Release parked guests before asking them to exit and joining them.
+    session_pause.resume();
     {
         std::lock_guard<std::mutex> lock(mutex);
         for (auto &[_, thread] : threads)
@@ -232,21 +234,16 @@ void KernelState::process_exit() {
 }
 
 void KernelState::pause_threads() {
+    // Publish a persistent pause before requesting an executing JIT to return. Native code
+    // observes the same gate at imports; no guest/debugger thread status is overwritten.
+    session_pause.pause();
     const std::lock_guard<std::mutex> lock(mutex);
-    for (auto &[_, thread] : threads) {
-        paused_threads_status[thread->id] = thread->status;
-        if (thread->status == ThreadStatus::running)
-            thread->suspend();
-    }
+    for (auto &[_, thread] : threads)
+        stop(*thread->cpu);
 }
 
 void KernelState::resume_threads() {
-    const std::lock_guard<std::mutex> lock(mutex);
-    for (auto &[_, thread] : threads) {
-        if (paused_threads_status[thread->id] == ThreadStatus::running)
-            thread->resume();
-    }
-    paused_threads_status.clear();
+    session_pause.resume();
 }
 
 void KernelState::deinit(MemState &mem) {
@@ -300,7 +297,7 @@ void KernelState::deinit(MemState &mem) {
 
     next_uid = 1;
 
-    paused_threads_status.clear();
+    session_pause.resume();
 }
 
 SceKernelModuleInfo *KernelState::find_module_by_addr(Address address) {

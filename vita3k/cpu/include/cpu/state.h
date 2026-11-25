@@ -39,6 +39,9 @@ struct CPUState {
     // Recompiled code (cpu/aot.h). Native code calls HLE imports itself, through this handler,
     // instead of returning to the thread's run loop; aot_unwind asks it to abandon its frames
     // because the thread is exiting.
+    // Checked before execution/re-entry, including the nested JIT sentinel loop.
+    // Installed by the kernel; cancellation may throw AotUnwind.
+    std::function<void()> execution_gate;
     std::function<void(CPUState &, uint32_t nid)> import_handler;
     // Called before native code enters another module's (LLE) export through an import stub, with the
     // export's address and the caller's stack pointer: may adjust the call's arguments (kernel).

@@ -29,6 +29,7 @@
 #include <mem/util.h>
 #include <rtc/rtc.h>
 #include <util/containers.h>
+#include <util/cooperative_pause.h>
 #include <util/types.h>
 
 #include <emuenv/app_launch_request.h>
@@ -188,7 +189,8 @@ struct KernelState {
     bool delete_callback(SceUID id);
     Ptr<Ptr<void>> get_thread_tls_addr(MemState &mem, SceUID thread_id, int key);
 
-    bool is_threads_paused() { return !paused_threads_status.empty(); }
+    CooperativePause session_pause;
+    bool is_threads_paused() { return session_pause.paused(); }
     void pause_threads();
     void resume_threads();
 
@@ -205,5 +207,4 @@ struct KernelState {
 
 private:
     std::atomic<SceUID> next_uid{ 1 };
-    std::map<SceUID, ThreadStatus> paused_threads_status;
 };

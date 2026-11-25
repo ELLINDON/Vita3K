@@ -708,6 +708,8 @@ int DynarmicCPU::run() {
     parent->svc_called = false;
     try {
         while (true) {
+            if (parent->execution_gate)
+                parent->execution_gate();
             const uint32_t start_pc = jit->Regs()[15];
             const uint64_t start_ticks = jit_ticks;
             const Dynarmic::HaltReason halt_reason = jit->Run();
@@ -820,6 +822,9 @@ bool DynarmicCPU::aot_boundary() {
 // thread's run loop: imports and native entries.
 void DynarmicCPU::aot_run_until_sentinel(uint32_t target) {
     while (true) {
+        // stop() may return here instead of to ThreadState::run_loop().
+        if (parent->execution_gate)
+            parent->execution_gate();
         parent->svc_called = false;
         halted = false;
         const uint64_t start_ticks = jit_ticks;

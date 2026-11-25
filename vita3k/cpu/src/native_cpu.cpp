@@ -51,6 +51,8 @@ int NativeCPU::run() {
     const uint32_t halt = aot_halt();
     try {
         while (true) {
+            if (parent->execution_gate)
+                parent->execution_gate();
             const uint32_t pc = guest.r[15];
             const bool thumb = is_thumb_mode();
             if (pc == halt && thumb) {

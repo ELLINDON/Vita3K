@@ -465,6 +465,8 @@ bool init(EmuEnvState &state, Config &cfg, const Root &root_paths) {
 }
 
 void shutdown_app_runtime(EmuEnvState &state) {
+    // Shutdown may wait for guest/GXM work: release session parking before cleanup.
+    state.kernel.session_pause.resume();
     state.audio.stop_all_ports();
 
     gxm::shutdown(state);

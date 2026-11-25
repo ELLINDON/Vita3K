@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <cpu/functions.h>
+#include <cpu/impl/aot_owner.h>
 #include <kernel/thread/thread_state.h>
 
 #include <kernel/state.h>
@@ -63,16 +64,25 @@ int ThreadState::init(const char *name, Ptr<const void> entry_point, int init_pr
     if (!cpu) {
         return SCE_KERNEL_ERROR_ERROR;
     }
-    // recompiled code calls imports itself (cpu/aot.h)
+    cpu->execution_gate = [this] {
+        if (!kernel.session_pause.wait([&] {
+                return cpu->aot_unwind.load(std::memory_order_acquire);
+            }))
+            throw AotUnwind{};
+    };
+    // Recompiled code calls imports itself, without returning to run_loop().
     cpu->import_handler = [this](CPUState &cpu_state, uint32_t nid) {
+        cpu_state.execution_gate();
         kernel.call_import(cpu_state, nid, id);
+        cpu_state.execution_gate();
     };
     // Ad hoc matching over a network instead of a Vita's direct link: games set the retransmit
     // interval of sceNetAdhocMatchingCreate (argument 8, on the stack at sp + 12) for the Vita's few
     // ms of latency. Soul Sacrifice Delta: 8 ms, 3 retries, so a joiner gave up after 25 ms, and a
     // host on Wi-Fi with power saving (laptops, the Steam Deck: 3 to 300 ms) could never be joined.
     // The interval is raised to at least MIN_ADHOC_REXMT_US.
-    cpu->lle_call_hook = [this](CPUState &, uint32_t target, uint32_t sp) {
+    cpu->lle_call_hook = [this](CPUState &state, uint32_t target, uint32_t sp) {
+        state.execution_gate();
         const Address create = kernel.adhoc_matching_create.load(std::memory_order_relaxed);
         if (!create || (target & ~1u) != (create & ~1u))
             return;
@@ -164,6 +174,7 @@ void ThreadState::exit(SceInt32 status) {
     exit_requested = true;
     returned_value = static_cast<uint32_t>(status);
     cpu->aot_unwind = true;
+    kernel.session_pause.notify();
 }
 
 void ThreadState::exit_delete(bool exit) {
@@ -172,6 +183,7 @@ void ThreadState::exit_delete(bool exit) {
     run_end_callback = exit;
     delete_requested = true;
     cpu->aot_unwind = true;
+    kernel.session_pause.notify();
 
     if (status == ThreadStatus::running) {
         stop(*cpu);
@@ -268,13 +280,19 @@ void ThreadState::run_loop() {
 
             lock.unlock();
 
+            // Do not hold the ThreadState mutex while waiting for the session to resume.
+            if (!kernel.session_pause.wait([&] { return cpu->aot_unwind.load(std::memory_order_acquire); })) {
+                lock.lock();
+                continue;
+            }
             // Single step or run
             const int res = do_step ? step(*cpu) : run(*cpu);
 
             // handle svc call if this was what stopped the cpu
             if (cpu->svc_called) {
                 const uint32_t nid = *Ptr<uint32_t>(read_pc(*cpu) + 4).get(mem);
-                kernel.call_import(*cpu, nid, id);
+                if (kernel.session_pause.wait([&] { return cpu->aot_unwind.load(std::memory_order_acquire); }))
+                    kernel.call_import(*cpu, nid, id);
                 clear_exclusive(*cpu);
             }
 

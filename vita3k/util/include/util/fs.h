@@ -31,6 +31,11 @@ namespace fs = boost::filesystem;
 
 #ifdef _WIN32
 #define FOPEN(filename, params) _wfopen(filename, L##params)
+#elif defined(__ANDROID__)
+// fopen, but a file the player picked (a link to /proc/self/fd/N, FrontendStepActivity) is read
+// through the descriptor the app holds (fs_utils.cpp)
+FILE *android_fopen(const char *filename, const char *mode);
+#define FOPEN(filename, params) android_fopen(filename, params)
 #else
 #define FOPEN(filename, params) fopen(filename, params)
 #endif

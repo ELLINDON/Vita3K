@@ -37,6 +37,8 @@ import org.libsdl.app.SDLActivity;
 public class FrontendStepActivity extends GameActivity {
     private static final String TAG = "FrontendStep";
     public static final String EXTRA_EXIT_CODE = "exit_code";
+    // picked files up to this size (licences, a small mod) are copied into the cache, bigger ones linked
+    private static final long SMALL_FILE = 16L * 1024 * 1024;
 
     // the files the player picked stay open while the step runs
     private final java.util.List<android.os.ParcelFileDescriptor> picked = new java.util.ArrayList<>();
@@ -45,7 +47,7 @@ public class FrontendStepActivity extends GameActivity {
      * The step's arguments, with each content:// URI (a file the player picked through Android's file
      * picker) as a path the native code can open: a link in the cache, named with the document's
      * extension (the front end tells a .pkg from a .zip by it), to /proc/self/fd/N of the open file. A
-     * 3 GB dump is read in place, never copied.
+     * 3 GB dump is read in place, never copied; a small file (a licence) is copied there instead.
      */
     @Override
     protected String[] getArguments() {
@@ -58,14 +60,30 @@ public class FrontendStepActivity extends GameActivity {
                 android.os.ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(uri, "r");
                 if (fd == null)
                     continue;
-                picked.add(fd);
                 String name = displayName(uri);
                 int dot = name.lastIndexOf('.');
                 String extension = dot >= 0 ? name.substring(dot).toLowerCase(java.util.Locale.ROOT) : "";
                 java.io.File link = new java.io.File(getCacheDir(), "picked-" + i + extension);
                 link.delete();
-                android.system.Os.symlink("/proc/self/fd/" + fd.getFd(), link.getPath());
-                Log.i(TAG, "picked " + name + " as " + link);
+                long size = fd.getStatSize();
+                if (size >= 0 && size <= SMALL_FILE) {
+                    // a licence: copied, as the native code reads it with a stream, which can't take
+                    // the descriptor
+                    try (java.io.InputStream in = new android.os.ParcelFileDescriptor.AutoCloseInputStream(fd);
+                         java.io.OutputStream out = new java.io.FileOutputStream(link)) {
+                        byte[] buffer = new byte[64 * 1024];
+                        for (int n; (n = in.read(buffer)) > 0;)
+                            out.write(buffer, 0, n);
+                    }
+                    Log.i(TAG, "picked " + name + " (" + size + " bytes) copied to " + link);
+                } else {
+                    // the native code's FOPEN reads through the descriptor behind the link: opening
+                    // the link would open the file again with the app's own permissions, which it
+                    // lacks for shared storage on some devices (ss-delta #23)
+                    picked.add(fd);
+                    android.system.Os.symlink("/proc/self/fd/" + fd.getFd(), link.getPath());
+                    Log.i(TAG, "picked " + name + " (" + size + " bytes) as " + link);
+                }
                 args[i] = link.getPath();
             } catch (Exception e) {
                 Log.e(TAG, "can't open " + uri, e);

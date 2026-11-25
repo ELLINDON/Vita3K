@@ -58,6 +58,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -471,7 +472,7 @@ std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &ar
 
     FILE *vpk_fp = FOPEN(archive_path.c_str(), "rb");
     if (!vpk_fp) {
-        LOG_CRITICAL("Failed to load archive file in path: {}", fs_utils::path_to_utf8(archive_path));
+        LOG_CRITICAL("Failed to load archive file in path: {} ({})", fs_utils::path_to_utf8(archive_path), std::strerror(errno));
         return {};
     }
 

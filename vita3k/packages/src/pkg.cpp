@@ -40,6 +40,9 @@
 #include <util/bytes.h>
 #include <util/log.h>
 
+#include <cerrno>
+#include <cstring>
+
 // Credits to mmozeiko https://github.com/mmozeiko/pkg2zip
 
 static void ctr_init(uint8_t *counter, uint8_t *iv, uint64_t n) {
@@ -86,7 +89,7 @@ bool decrypt_install_nonpdrm(EmuEnvState &emuenv, const fs::path &drmlicpath, co
 bool install_pkg(const fs::path &pkg_path, EmuEnvState &emuenv, std::string &p_zRIF, const std::function<void(float)> &progress_callback) {
     FILE *infile = FOPEN(pkg_path.c_str(), "rb");
     if (!infile) {
-        LOG_CRITICAL("Failed to load pkg file in path: {}", fs_utils::path_to_utf8(pkg_path));
+        LOG_CRITICAL("Failed to load pkg file in path: {} ({})", fs_utils::path_to_utf8(pkg_path), std::strerror(errno));
         return false;
     }
 

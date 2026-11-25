@@ -699,6 +699,11 @@ int run(Profile &profile, int argc, char *argv[]) {
     // [debug] shader_blend: auto leaves the renderer's choice
     if (!std::getenv("VITA3K_SHADER_BLEND") && settings.shader_blend != "auto")
         set_env("VITA3K_SHADER_BLEND", settings.shader_blend == "on" ? "1" : "0");
+    // [debug] net_trace: P2PSocket logs each Ad Hoc packet (ss-delta #21)
+    if (!std::getenv("VITA3K_NET_TRACE") && settings.net_trace)
+        set_env("VITA3K_NET_TRACE", "1");
+    if (const char *trace = std::getenv("VITA3K_NET_TRACE"); trace && trace[0] == '1')
+        LOG_INFO("Ad Hoc Play: every packet sent and received is logged ([debug] net_trace)");
     cfg.disable_surface_sync = settings.surface_sync == 3;
     cfg.memory_mapping = "double-buffer";
 #ifdef __ANDROID__

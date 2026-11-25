@@ -487,17 +487,33 @@ bool is_local_adhoc_broadcast(uint32_t addr) {
 }
 
 void init_address(int32_t &outIndex, uint32_t &netAddr, uint32_t &broadcastAddr) {
+    // the addresses Ad Hoc Play uses, logged once for each change (ss-delta #21: which adapter a player's copy took)
+    static std::string logged;
     if (local_adhoc) {
         netAddr = local_adhoc_addr(local_adhoc);
         broadcastAddr = htonl(0x7FFFFFFFu); // 127.255.255.255, sent to each copy (P2PSocket)
+        const std::string text = fmt::format("Ad Hoc Play: copies on this PC (network = local), this one 127.0.0.{}", local_adhoc);
+        if (text != logged)
+            LOG_INFO("{}", logged = text);
         return;
     }
     // Initialize the net and broadcast address based on the assigned address and netmask
+    const auto addrs = get_all_assigned_addrs();
     const auto addr = get_selected_assigned_addr(outIndex);
     int netMask;
     inet_pton(AF_INET, addr.addr.c_str(), &netAddr);
     inet_pton(AF_INET, addr.netMask.c_str(), &netMask);
     broadcastAddr = netAddr | ~netMask;
+    in_addr broadcast{};
+    broadcast.s_addr = broadcastAddr;
+    char broadcast_text[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &broadcast, broadcast_text, sizeof(broadcast_text));
+    std::string text = fmt::format("Ad Hoc Play: network adapter {} of {} ([multiplayer] adapter), {} mask {} ({}), broadcasts to {}",
+        outIndex, addrs.size(), addr.addr, addr.netMask, addr.name, broadcast_text);
+    for (size_t i = 0; i < addrs.size(); i++)
+        text += fmt::format("\n  adapter {}: {} mask {} ({})", i, addrs[i].addr, addrs[i].netMask, addrs[i].name);
+    if (text != logged)
+        LOG_INFO("{}", logged = text);
 }
 
 } // namespace net_utils

@@ -391,6 +391,8 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
         out.framebuffer_reads = values.get("debug.framebuffer_reads");
     if (declared("debug.shader_blend"))
         out.shader_blend = values.get("debug.shader_blend");
+    if (declared("debug.net_trace"))
+        out.net_trace = values.get_bool("debug.net_trace");
     if (declared("debug.gpu"))
         out.gpu = values.get_int("debug.gpu");
     if (declared("debug.gpu_driver"))
@@ -553,6 +555,9 @@ IniSection debug(const std::string &id) {
             { "shader_blend", Kind::Choice, "auto", 0, 0, { "auto", "on", "off" },
                 "Smoke and fire whose shaders read the picture only to blend: blended by the graphics card's\n"
                 "blender instead. auto: on cards with neither shader interlock nor raster-order access. on, off." },
+            { "net_trace", Kind::Bool, "false", 0, 0, {},
+                fmt::format("Every Ad Hoc Play packet sent and received in {}/vita3k.log, for a connection problem\n"
+                            "(the log grows quickly: leave it off otherwise).", id) },
             { "gpu", Kind::Int, "0", 0, 16, {},
                 fmt::format("The graphics card: 0 picks one (a dedicated card first); N, the Nth of the\n"
                             "\"Vulkan devices\" {}/vita3k.log lists (for a laptop that starts on the wrong one).", id) },

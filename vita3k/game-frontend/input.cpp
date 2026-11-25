@@ -190,8 +190,13 @@ std::string key_cap_text(PhysicalKeyCode code) {
     static const std::map<std::string, std::string> short_forms{
         { "Space", "SPC" }, { "Enter", "ENT" }, { "NumpadEnter", "ENT" }, { "Tab", "TAB" }, { "Backspace", "BS" },
         { "Escape", "ESC" }, { "ShiftLeft", "SHF" }, { "ShiftRight", "SHF" }, { "ControlLeft", "CTL" },
-        { "ControlRight", "CTL" }, { "AltLeft", "ALT" }, { "AltRight", "ALT" }, { "MetaLeft", "WIN" },
-        { "MetaRight", "WIN" }, { "CapsLock", "CAP" }, { "Insert", "INS" }, { "Delete", "DEL" }, { "Home", "HOM" },
+        { "ControlRight", "CTL" }, { "AltLeft", "ALT" }, { "AltRight", "ALT" },
+#ifdef __APPLE__
+        { "MetaLeft", "CMD" }, { "MetaRight", "CMD" },
+#else
+        { "MetaLeft", "WIN" }, { "MetaRight", "WIN" },
+#endif
+        { "CapsLock", "CAP" }, { "Insert", "INS" }, { "Delete", "DEL" }, { "Home", "HOM" },
         { "End", "END" }, { "PageUp", "PGU" }, { "PageDown", "PGD" }, { "Comma", "," }, { "Period", "." },
         { "Slash", "/" }, { "Backslash", "\\" }, { "Semicolon", ";" }, { "Quote", "'" }, { "BracketLeft", "[" },
         { "BracketRight", "]" }, { "Minus", "-" }, { "Equal", "=" }, { "Backquote", "`" }, { "NumpadAdd", "+" },

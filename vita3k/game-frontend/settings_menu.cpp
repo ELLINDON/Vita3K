@@ -59,6 +59,12 @@ constexpr color4f CLEAR{ 0.f, 0.f, 0.f, 0.f };
 
 // the Controls page's columns: the key, the second key, the gamepad button
 constexpr int16_t CELL_X = PANEL_X + 254, CELL_W = 146, CELL_GAP = 8;
+// Android shows the gamepad's column only (no keyboard there to speak of)
+#ifdef __ANDROID__
+constexpr size_t FIRST_COLUMN = 2;
+#else
+constexpr size_t FIRST_COLUMN = 0;
+#endif
 constexpr int16_t cell_x(size_t column) { return static_cast<int16_t>(CELL_X + (CELL_W + CELL_GAP) * static_cast<int16_t>(column)); }
 // a binding waits this long for its input, ignores input for the first moments (the press that started
 // it), and the menu's own buttons are ignored for a moment after (the bound press reaching the menu)
@@ -191,6 +197,7 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
     : m_game_name(game_name) {
     visible = true;
     m_allow_input_on_pause = true;
+    m_column = FIRST_COLUMN;
     const bool has_gamepad = std::any_of(layout.sections.begin(), layout.sections.end(), [](const IniSection &s) { return s.name == "gamepad"; });
     for (const auto &section : layout.sections) {
         if (section.name == "keyboard" && has_gamepad) {
@@ -204,6 +211,11 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
             const auto &keyboard = values.section("keyboard");
             const auto &gamepad = values.section("gamepad");
             for (const auto &b : button_bindings()) {
+#ifdef __ANDROID__
+                // the gamepad only: nothing to change for what a gamepad's sticks and triggers drive
+                if (*b.fixed_gamepad)
+                    continue;
+#endif
                 Row row;
                 row.binding = Binding::Button;
                 row.section = "keyboard";
@@ -651,7 +663,7 @@ void SettingsMenu::binding_button(Row &row, pad_button button) {
     switch (button) {
     case pad_button::dpad_left:
     case pad_button::ls_left:
-        if (m_column > 0)
+        if (m_column > FIRST_COLUMN)
             m_column--;
         break;
     case pad_button::dpad_right:
@@ -927,7 +939,7 @@ done:
                 // the Controls page's column names
                 result.add(text("Vita button", PANEL_X + 34, y + 12, 200, 20, 13, TEXT_DIM).get_compiled());
                 static const char *const names[] = { "Key", "Second key", "Gamepad" };
-                for (size_t c = 0; c < 3; c++)
+                for (size_t c = FIRST_COLUMN; c < 3; c++)
                     result.add(text(names[c], cell_x(c), y + 12, CELL_W, 20, 13, TEXT_DIM, overlay_element::center).get_compiled());
                 continue;
             }
@@ -936,7 +948,7 @@ done:
             if (row.binding != Binding::None) {
                 // a binding: its name, its two keys and its gamepad button, the selected one framed
                 result.add(text(row.spec.title, PANEL_X + 34, y + 6, 214, 24, 16, TEXT).get_compiled());
-                for (size_t c = 0; c < 3; c++) {
+                for (size_t c = FIRST_COLUMN; c < 3; c++) {
                     const bool cell_selected = selected && c == m_column;
                     const bool waiting = cell_selected && listening;
                     std::string value;
@@ -1023,12 +1035,19 @@ done:
                 help = row.binding == Binding::Touch ? "Press the new gamepad button, or LT or RT. Esc: cancel."
                                                      : "Press the new gamepad button. Esc: cancel.";
         } else if (row.binding != Binding::None) {
+#ifdef __ANDROID__
+            const std::string defaults = row.default_gamepad.empty() ? "none" : gamepad_display_name(row.default_gamepad);
+            help += (help.empty() ? "" : " ") + fmt::format("Cross: change it, then press the new button. Square: clear it. Triangle: its default ({}). "
+                                                            "A button another control has changes places with it.",
+                                                    defaults);
+#else
             std::string defaults = join_keys(row.default_keys);
             if (row.fixed_gamepad.empty() && !row.default_gamepad.empty())
                 defaults += (defaults.empty() ? "" : ", ") + gamepad_display_name(row.default_gamepad);
             help += (help.empty() ? "" : " ") + fmt::format("Cross: change the selected one, then press the new key or button. Square: clear it. "
                                                             "Triangle: this control's defaults ({}). A key or button another control has changes places with it.",
                                                     defaults.empty() ? "none" : defaults);
+#endif
         } else if (!row.editable)
             help += (help.empty() ? "" : " ") + std::string("Change it in the settings file.");
         else if (row.spec.text_entry && !m_text_editing.load())
@@ -1062,7 +1081,7 @@ done:
     // the controls: a gamepad's, and on a PC the keyboard's too (as the Controls page binds them)
     const bool on_binding = page && m_row < page->rows.size() && page->rows[m_row].binding != Binding::None;
 #ifdef __ANDROID__
-    const std::string menu_hints = on_binding ? "Left/Right: column    Cross: change    Square: clear    Triangle: default    L1/R1: page    Circle: close"
+    const std::string menu_hints = on_binding ? "Up/Down: choose    Cross: change    Square: clear    Triangle: default    L1/R1: page    Circle: close"
                                               : "Up/Down: choose    Left/Right, Cross: change    L1/R1: page    Circle: close";
 #else
     const std::string menu_hints = on_binding

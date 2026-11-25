@@ -1161,7 +1161,10 @@ int run(Profile &profile, int argc, char *argv[]) {
             if (event.key.repeat)
                 break;
             other_input_used();
+#ifndef __ANDROID__
+            // (on Android the system's Back and a device's extra buttons arrive as keys too: no keyboard)
             ctx.last_input = InputDevice::Keyboard;
+#endif
             if (mouse_camera_on() && !menu
                 && std::find(capture_keys.begin(), capture_keys.end(), key_from_scancode(event.key.scancode)) != capture_keys.end()) {
                 // the capture key captures or releases the cursor, and is no Vita button then
@@ -1206,8 +1209,11 @@ int run(Profile &profile, int argc, char *argv[]) {
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
             mouse_used();
-            if (down)
+#ifndef __ANDROID__
+            // a real mouse's click, not one SDL made from a touch or a pen (a touchscreen PC, the Steam Deck)
+            if (down && event.button.which != SDL_TOUCH_MOUSEID && event.button.which != SDL_PEN_MOUSEID)
                 ctx.last_input = InputDevice::Keyboard;
+#endif
             if (event.button.button == SDL_BUTTON_MIDDLE && down && mouse_camera_on() && !menu)
                 capture_wanted = !capture_wanted;
             // the side buttons are bindings ([keyboard], [touch]: MouseX1, MouseX2)

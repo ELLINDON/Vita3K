@@ -119,9 +119,9 @@ int adapter_index(const std::string &value) {
 // letters for a host name and commas), and applied at once (frontend.cpp)
 SettingSpec peers_setting() {
     SettingSpec s{ "peers", Kind::Text, "", 0, 0, {},
-        "lan, over Tailscale or another network that passes no broadcasts: the host's address (or the other\n"
-        "players', separated by commas), e.g. its Tailscale IP 100.x.y.z or name. Each broadcast also goes to\n"
-        "each, and to every address a packet came from, so the host needs none (docs/TAILSCALE.md)." };
+        "lan, over a VPN (Tailscale, ZeroTier, Radmin VPN) or another network that passes no broadcasts: the\n"
+        "host's VPN address (or the other players', separated by commas). Each broadcast also goes to each,\n"
+        "and to every address a packet came from, so the host needs none (docs/ONLINE-PLAY.md)." };
     s.title = "Peers (host address)";
     s.live = true;
     s.text_entry = true;

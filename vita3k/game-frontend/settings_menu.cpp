@@ -65,6 +65,12 @@ constexpr size_t FIRST_COLUMN = 2;
 #else
 constexpr size_t FIRST_COLUMN = 0;
 #endif
+// the key that stops waiting for a gamepad button (Android's Back arrives as a key)
+#ifdef __ANDROID__
+#define CANCEL_KEY "Back"
+#else
+#define CANCEL_KEY "Esc"
+#endif
 constexpr int16_t cell_x(size_t column) { return static_cast<int16_t>(CELL_X + (CELL_W + CELL_GAP) * static_cast<int16_t>(column)); }
 // a binding waits this long for its input, ignores input for the first moments (the press that started
 // it), and the menu's own buttons are ignored for a moment after (the bound press reaching the menu)
@@ -562,6 +568,8 @@ void SettingsMenu::set_keys(Row &row, std::vector<std::string> keys) {
     if (keys == row.keys)
         return;
     row.keys = keys;
+    // the button that made the change may still be held, and now press another Vita button
+    m_ignore_until = std::max(m_ignore_until, std::chrono::steady_clock::now() + AFTER_LISTEN);
     if (row.binding == Binding::Button)
         m_changes.push_back({ "keyboard", row.name, join_keys(keys) });
     else
@@ -572,6 +580,7 @@ void SettingsMenu::set_gamepad(Row &row, const std::string &gamepad) {
     if (gamepad == row.gamepad || !row.fixed_gamepad.empty())
         return;
     row.gamepad = gamepad;
+    m_ignore_until = std::max(m_ignore_until, std::chrono::steady_clock::now() + AFTER_LISTEN);
     if (row.binding == Binding::Button)
         m_changes.push_back({ "gamepad", row.name, gamepad });
     else
@@ -954,7 +963,7 @@ done:
                     std::string value;
                     bool dim = false;
                     if (waiting)
-                        value = c < 2 ? "Press a key" : "Press a button";
+                        value = c < 2 ? "Press a key" : "Press it";
                     else if (c < 2) {
                         dim = c >= row.keys.size();
                         value = dim ? "-" : row.keys[c];
@@ -1032,8 +1041,8 @@ done:
                 help = "Press the new key, or a mouse button: a side button, or the left or right button (those press it only "
                        "while the mouse camera has the cursor). Esc or a gamepad button: cancel.";
             else
-                help = row.binding == Binding::Touch ? "Press the new gamepad button, or LT or RT. Esc: cancel."
-                                                     : "Press the new gamepad button. Esc: cancel.";
+                help = std::string(row.binding == Binding::Touch ? "Press the new gamepad button, or LT or RT." : "Press the new gamepad button.")
+                    + " " CANCEL_KEY ": cancel.";
         } else if (row.binding != Binding::None) {
 #ifdef __ANDROID__
             const std::string defaults = row.default_gamepad.empty() ? "none" : gamepad_display_name(row.default_gamepad);
@@ -1092,7 +1101,7 @@ done:
 #endif
     const std::string hints = m_text_editing.load()
         ? "Type, or Up/Down: character    Left/Right: move    Square: delete    Cross, Enter: done    Circle, Esc: cancel"
-        : on_binding && listening ? std::string(m_column < 2 ? "Press the new key or mouse button    Esc: cancel" : "Press the new gamepad button    Esc: cancel")
+        : on_binding && listening ? std::string(m_column < 2 ? "Press the new key or mouse button    Esc: cancel" : "Press the new gamepad button    " CANCEL_KEY ": cancel")
                                   : menu_hints;
     result.add(text(hints, PANEL_X + 24, FOOTER_Y, PANEL_W - 48, 20, 12, TEXT_DIM, overlay_element::center).get_compiled());
     return result;

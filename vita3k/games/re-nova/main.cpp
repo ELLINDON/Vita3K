@@ -118,6 +118,11 @@ int main(int argc, char *argv[]) {
         if (const char *mapping = std::getenv("RENOVA_MEMORY_MAPPING"); mapping && *mapping)
             cfg.memory_mapping = mapping;
         LOG_INFO("memory mapping: {}", cfg.memory_mapping);
+        // a draw whose pipeline is still compiling waits for it (up to 250 ms, from a budget that refills
+        // at a quarter of the time passing) rather than being skipped: cutscenes, mostly seen once,
+        // showed characters missing until a camera cut. With an empty cache the opening waited 120 ms in
+        // all (54 ms at most in a frame) and drew everything a warm cache draws
+        cfg.pipeline_wait_ms = 250;
     };
     profile.hooks.before_mods = [](game_frontend::Context &ctx, bool repatch) {
         log_patch(*ctx.emuenv, repatch);

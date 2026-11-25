@@ -64,6 +64,13 @@ public:
     // Exit the game, confirmed: the front end quits as when the window is closed
     bool exit_requested() const { return m_exit_requested.load(); }
 
+    // a text_entry row being edited (Cross on it): the front end then sends the keyboard here instead
+    // of to the game, and turns on text input (Android's on-screen keyboard)
+    bool text_editing() const { return m_text_editing.load(); }
+    enum class TextKey { Backspace, Delete, Left, Right, Home, End, Enter, Escape };
+    void text_input(const std::string &text); // typed characters (UTF-8; printable ASCII is kept)
+    void text_key(TextKey key);
+
 private:
     std::mutex m_mutex; // the pages and the selection (input thread and render thread)
     std::vector<Page> m_pages;
@@ -73,8 +80,14 @@ private:
     std::atomic<bool> m_close_requested{ false };
     std::atomic<bool> m_exit_requested{ false };
     bool m_exit_armed = false; // Cross pressed once on Exit the game; moving away disarms it
+    std::atomic<bool> m_text_editing{ false };
+    std::string m_edit_text; // the selected row's text while it is edited
+    size_t m_edit_cursor = 0; // 0 to its length (the end: a new character)
 
     void step(Row &row, int direction);
+    Row *selected_row();
+    void end_edit(bool commit);
+    void edit_button(::overlay::pad_button button);
     void move_row(int direction);
     void move_page(int direction);
 };

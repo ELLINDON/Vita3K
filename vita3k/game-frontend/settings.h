@@ -55,6 +55,10 @@ struct SettingSpec {
     // for a PC only (a window, a keyboard, several copies on one machine): Android's settings file and
     // settings menu leave it out; its default still applies there
     bool desktop_only = false;
+    // a Text the settings menu edits: typed on a keyboard (Android's on-screen one too), or with a
+    // gamepad, Up/Down changing the character at the cursor (text_chars, in that order)
+    bool text_entry = false;
+    std::string text_chars;
 };
 
 struct IniSection {

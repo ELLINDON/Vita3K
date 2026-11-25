@@ -70,6 +70,7 @@ bool is_local_adhoc_broadcast(uint32_t addr); // network byte order
 // set here ([multiplayer] peers) and every address an ad hoc packet came from. So it is enough that
 // one side knows the other's address. All addresses in network byte order.
 void set_lan_peers(const std::vector<uint32_t> &addrs);
+void set_lan_peers_text(const std::string &list); // addresses or host names, separated by commas, semicolons or spaces
 void note_lan_peer(uint32_t addr); // a packet came from it
 std::vector<uint32_t> lan_peers(); // the set ones and the learned ones
 bool is_lan_broadcast(uint32_t addr); // lan mode: the adapter's broadcast address or 255.255.255.255

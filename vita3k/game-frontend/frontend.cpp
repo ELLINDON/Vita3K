@@ -984,6 +984,8 @@ int run(Profile &profile, int argc, char *argv[]) {
             emuenv.renderer->set_screen_filter(change.value);
         else if (key == "audio.volume")
             emuenv.audio.set_global_volume(std::clamp(std::atoi(change.value.c_str()), 0, 100) / 100.f);
+        else if (key == "multiplayer.peers" && !net_utils::local_adhoc_player())
+            net_utils::set_lan_peers_text(change.value); // the next broadcast goes to them (a game's lan mode)
         else if (change.section == "mouse") {
             configure_mouse(false);
             if (!hide_cursor_on())
@@ -1073,6 +1075,30 @@ int run(Profile &profile, int argc, char *argv[]) {
             touch.mouse_x = x * density;
             touch.mouse_y = y * density;
         };
+        // a settings menu row being edited: the keyboard edits it (repeats too), and goes nowhere else
+        if (menu && menu->text_editing()) {
+            if (event.type == SDL_EVENT_TEXT_INPUT) {
+                menu->text_input(event.text.text ? event.text.text : "");
+                return;
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN) {
+                using TK = SettingsMenu::TextKey;
+                switch (event.key.key) {
+                case SDLK_BACKSPACE: menu->text_key(TK::Backspace); break;
+                case SDLK_DELETE: menu->text_key(TK::Delete); break;
+                case SDLK_LEFT: menu->text_key(TK::Left); break;
+                case SDLK_RIGHT: menu->text_key(TK::Right); break;
+                case SDLK_HOME: menu->text_key(TK::Home); break;
+                case SDLK_END: menu->text_key(TK::End); break;
+                case SDLK_RETURN:
+                case SDLK_KP_ENTER: menu->text_key(TK::Enter); break;
+                case SDLK_ESCAPE: menu->text_key(TK::Escape); break;
+                case SDLK_F1: close_menu(); break;
+                default: break;
+                }
+                return;
+            }
+        }
         switch (event.type) {
         case SDL_EVENT_KEY_DOWN:
             if (event.key.repeat)
@@ -1304,10 +1330,12 @@ int run(Profile &profile, int argc, char *argv[]) {
             && std::chrono::steady_clock::now() - last_mouse_use >= std::chrono::seconds(3))
             set_cursor_hidden(true);
         // typed text reaches the game's keyboard dialogs (a player name) only while SDL's text
-        // input is on; the session handles Enter, Backspace and Escape itself
+        // input is on; the session handles Enter, Backspace and Escape itself. A settings menu row
+        // being edited takes typed text too (and on Android shows the on-screen keyboard)
         if (window) {
-            if (ime != SDL_TextInputActive(window)) {
-                if (ime)
+            const bool want_text = ime || (menu && menu->text_editing());
+            if (want_text != SDL_TextInputActive(window)) {
+                if (want_text)
                     SDL_StartTextInput(window);
                 else
                     SDL_StopTextInput(window);

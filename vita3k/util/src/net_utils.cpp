@@ -31,6 +31,7 @@
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -463,9 +464,14 @@ std::vector<AssignedAddr> get_all_assigned_addrs() {
     return ret_addrs();
 }
 
+static size_t auto_adapter_index(const std::vector<AssignedAddr> &addrs);
+
 AssignedAddr get_selected_assigned_addr(int32_t &outIndex) {
     const auto addrs = get_all_assigned_addrs();
-    if (outIndex >= addrs.size()) {
+    // ss-delta: a negative index (adapter = auto) picks the adapter each time, and stays negative
+    if (outIndex < 0)
+        return addrs[auto_adapter_index(addrs)];
+    if (outIndex >= static_cast<int32_t>(addrs.size())) {
         LOG_ERROR("Invalid index {}, returning first address", outIndex);
         outIndex = 0;
     }
@@ -486,6 +492,68 @@ static std::string ipv4_text(uint32_t addr) {
     char text[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &a, text, sizeof(text));
     return text;
+}
+
+static void ensure_winsock() {
+#ifdef _WIN32
+    // name lookups and the route check may run before the game's sceNetInit (which starts Winsock)
+    static const bool started = [] {
+        WSADATA data;
+        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    }();
+    (void)started;
+#endif
+}
+
+// the address this machine sends from to reach dest (the routing table's choice; a UDP connect sends nothing)
+static uint32_t route_source(uint32_t dest) {
+    ensure_winsock();
+#ifdef _WIN32
+    const SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET)
+        return 0;
+#else
+    const int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0)
+        return 0;
+#endif
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(9);
+    to.sin_addr.s_addr = dest;
+    uint32_t source = 0;
+    if (connect(s, reinterpret_cast<const sockaddr *>(&to), sizeof(to)) == 0) {
+        sockaddr_in local{};
+        socklen_t len = sizeof(local);
+        if (getsockname(s, reinterpret_cast<sockaddr *>(&local), &len) == 0)
+            source = local.sin_addr.s_addr;
+    }
+#ifdef _WIN32
+    closesocket(s);
+#else
+    close(s);
+#endif
+    return source;
+}
+
+// adapter = auto: the adapter this machine reaches the first peer through, or without peers the one of
+// its default route (the internet's; not a virtual adapter that happens to come first); else the first
+static size_t auto_adapter_index(const std::vector<AssignedAddr> &addrs) {
+    uint32_t dest = 0;
+    {
+        const std::lock_guard<std::mutex> lock(lan_mutex);
+        if (!set_peers.empty())
+            dest = set_peers.front();
+    }
+    if (!dest)
+        inet_pton(AF_INET, "8.8.8.8", &dest);
+    const uint32_t source = route_source(dest);
+    for (size_t i = 0; i < addrs.size(); i++) {
+        uint32_t a = 0;
+        if (source && inet_pton(AF_INET, addrs[i].addr.c_str(), &a) == 1 && a == source)
+            return i;
+    }
+    return 0;
 }
 
 void set_local_adhoc(int player) {
@@ -526,8 +594,13 @@ void init_address(int32_t &outIndex, uint32_t &netAddr, uint32_t &broadcastAddr)
     broadcast.s_addr = broadcastAddr;
     char broadcast_text[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &broadcast, broadcast_text, sizeof(broadcast_text));
+    std::string index_text = std::to_string(outIndex);
+    if (outIndex < 0)
+        for (size_t i = 0; i < addrs.size(); i++)
+            if (addrs[i].addr == addr.addr)
+                index_text = fmt::format("auto ({})", i);
     std::string text = fmt::format("Ad Hoc Play: network adapter {} of {} ([multiplayer] adapter), {} mask {} ({}), broadcasts to {}",
-        outIndex, addrs.size(), addr.addr, addr.netMask, addr.name, broadcast_text);
+        index_text, addrs.size(), addr.addr, addr.netMask, addr.name, broadcast_text);
     for (size_t i = 0; i < addrs.size(); i++)
         text += fmt::format("\n  adapter {}: {} mask {} ({})", i, addrs[i].addr, addrs[i].netMask, addrs[i].name);
     {
@@ -556,6 +629,30 @@ void init_address(int32_t &outIndex, uint32_t &netAddr, uint32_t &broadcastAddr)
 void set_lan_peers(const std::vector<uint32_t> &addrs) {
     const std::lock_guard<std::mutex> lock(lan_mutex);
     set_peers = addrs;
+}
+
+void set_lan_peers_text(const std::string &list) {
+    std::vector<uint32_t> peers;
+    std::string resolved;
+    for (size_t start = 0; start <= list.size();) {
+        size_t end = list.find_first_of(",; ", start);
+        if (end == std::string::npos)
+            end = list.size();
+        const std::string host = list.substr(start, end - start);
+        start = end + 1;
+        if (host.empty())
+            continue;
+        const uint32_t addr = resolve_ipv4(host);
+        if (!addr) {
+            LOG_ERROR("Ad Hoc Play: peer {} doesn't resolve to an IPv4 address", host);
+            continue;
+        }
+        peers.push_back(addr);
+        resolved += (resolved.empty() ? "" : ", ") + (host == ipv4_text(addr) ? host : fmt::format("{} ({})", host, ipv4_text(addr)));
+    }
+    set_lan_peers(peers);
+    if (!peers.empty())
+        LOG_INFO("Ad Hoc Play: peers {} ([multiplayer] peers)", resolved);
 }
 
 void note_lan_peer(uint32_t addr) {
@@ -597,14 +694,7 @@ uint32_t resolve_ipv4(const std::string &host) {
     uint32_t addr = 0;
     if (inet_pton(AF_INET, host.c_str(), &addr) == 1)
         return addr;
-#ifdef _WIN32
-    // may run before the game's sceNetInit (which starts Winsock)
-    static const bool winsock = [] {
-        WSADATA data;
-        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
-    }();
-    (void)winsock;
-#endif
+    ensure_winsock();
     addrinfo hints{};
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;

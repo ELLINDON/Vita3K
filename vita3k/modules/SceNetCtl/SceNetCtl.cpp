@@ -252,7 +252,8 @@ static void adhoc_thread(EmuEnvState &emuenv, int thread_id) {
             continue;
         }
 
-        if (emuenv.cfg.adhoc_addr != emuenv.net.current_addr_index) {
+        // ss-delta: adapter = auto (a negative index) picks again each time, for peers set since
+        if (emuenv.cfg.adhoc_addr != emuenv.net.current_addr_index || emuenv.cfg.adhoc_addr < 0) {
             // If address has changed, reinitialize the network address and broadcast address
             std::lock_guard<std::mutex> lock(emuenv.netctl.mutex);
             net_utils::init_address(emuenv.cfg.adhoc_addr, emuenv.net.netAddr, emuenv.net.broadcastAddr);

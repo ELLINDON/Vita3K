@@ -115,6 +115,8 @@ std::string shown_value(const SettingsMenu::Row &row) {
             if (row.spec.choices[i] == value)
                 return row.spec.choice_labels[i] + (row.value.empty() ? " (default)" : "");
     }
+    if (row.value.empty() && row.spec.text_entry)
+        return "(none)";
     if (row.value.empty())
         return row.editable ? "(default)" : "(not set)";
     if (row.spec.kind == Kind::Bool)
@@ -145,7 +147,7 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
             row.section = section.name;
             row.spec = spec;
             row.value = values.get(section.name + "." + spec.key);
-            row.editable = spec.kind != Kind::Path && spec.kind != Kind::Text;
+            row.editable = spec.kind != Kind::Path && (spec.kind != Kind::Text || spec.text_entry);
             page.rows.push_back(std::move(row));
         }
         // a page with nothing to change from here (paths) stays in the settings file only
@@ -213,6 +215,14 @@ void SettingsMenu::step(Row &row, int direction) {
         next = format_float(v);
         break;
     }
+    case Kind::Text:
+        // Cross or Right starts editing it (edit_button, text_input); Left does nothing
+        if (spec.text_entry && direction > 0) {
+            m_edit_text = row.value;
+            m_edit_cursor = m_edit_text.size();
+            m_text_editing.store(true);
+        }
+        return;
     default:
         return;
     }
@@ -222,6 +232,136 @@ void SettingsMenu::step(Row &row, int direction) {
     if (!spec.live)
         row.needs_restart = true;
     m_changes.push_back({ row.section, spec.key, next });
+}
+
+SettingsMenu::Row *SettingsMenu::selected_row() {
+    if (m_pages.empty() || m_row >= m_pages[m_page].rows.size())
+        return nullptr;
+    return &m_pages[m_page].rows[m_row];
+}
+
+void SettingsMenu::end_edit(bool commit) {
+    if (!m_text_editing.load())
+        return;
+    m_text_editing.store(false);
+    Row *row = selected_row();
+    if (!commit || !row)
+        return;
+    // spaces around it go; the separators (commas) stay as typed
+    std::string next = m_edit_text;
+    next.erase(0, next.find_first_not_of(' '));
+    next.erase(next.find_last_not_of(' ') + 1);
+    if (next == row->value)
+        return;
+    row->value = next;
+    if (!row->spec.live)
+        row->needs_restart = true;
+    m_changes.push_back({ row->section, row->spec.key, next });
+}
+
+// a gamepad while a row is edited: Up/Down change the character at the cursor (through the row's
+// text_chars), Left/Right move the cursor, Square deletes, Cross/Start keep the text, Circle drops it
+void SettingsMenu::edit_button(pad_button button) {
+    const Row *row = selected_row();
+    const std::string chars = row && !row->spec.text_chars.empty() ? row->spec.text_chars : "0123456789.";
+    switch (button) {
+    case pad_button::dpad_up:
+    case pad_button::ls_up:
+    case pad_button::dpad_down:
+    case pad_button::ls_down: {
+        const int direction = button == pad_button::dpad_up || button == pad_button::ls_up ? 1 : -1;
+        if (m_edit_cursor >= m_edit_text.size()) {
+            m_edit_text.push_back(direction > 0 ? chars.front() : chars.back());
+            m_edit_cursor = m_edit_text.size() - 1;
+            break;
+        }
+        const size_t at = chars.find(static_cast<char>(std::tolower(static_cast<unsigned char>(m_edit_text[m_edit_cursor]))));
+        const size_t n = chars.size();
+        const size_t next = at == std::string::npos ? 0 : (at + n + (direction > 0 ? 1 : n - 1)) % n;
+        m_edit_text[m_edit_cursor] = chars[next];
+        break;
+    }
+    case pad_button::dpad_left:
+    case pad_button::ls_left:
+        if (m_edit_cursor > 0)
+            m_edit_cursor--;
+        break;
+    case pad_button::dpad_right:
+    case pad_button::ls_right:
+        if (m_edit_cursor < m_edit_text.size())
+            m_edit_cursor++;
+        break;
+    case pad_button::square:
+        if (m_edit_cursor < m_edit_text.size())
+            m_edit_text.erase(m_edit_cursor, 1);
+        else if (!m_edit_text.empty()) {
+            m_edit_text.pop_back();
+            m_edit_cursor = m_edit_text.size();
+        }
+        break;
+    case pad_button::cross:
+    case pad_button::start:
+        end_edit(true);
+        break;
+    case pad_button::circle:
+        end_edit(false);
+        break;
+    default:
+        break;
+    }
+}
+
+void SettingsMenu::text_input(const std::string &text) {
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_text_editing.load())
+            return;
+        for (const char c : text) {
+            if (c < 0x20 || c > 0x7E || m_edit_text.size() >= 200)
+                continue; // printable ASCII only (an address or a host name)
+            m_edit_text.insert(m_edit_cursor++, 1, c);
+        }
+    }
+    refresh();
+}
+
+void SettingsMenu::text_key(TextKey key) {
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_text_editing.load())
+            return;
+        switch (key) {
+        case TextKey::Backspace:
+            if (m_edit_cursor > 0)
+                m_edit_text.erase(--m_edit_cursor, 1);
+            break;
+        case TextKey::Delete:
+            if (m_edit_cursor < m_edit_text.size())
+                m_edit_text.erase(m_edit_cursor, 1);
+            break;
+        case TextKey::Left:
+            if (m_edit_cursor > 0)
+                m_edit_cursor--;
+            break;
+        case TextKey::Right:
+            if (m_edit_cursor < m_edit_text.size())
+                m_edit_cursor++;
+            break;
+        case TextKey::Home:
+            m_edit_cursor = 0;
+            break;
+        case TextKey::End:
+            m_edit_cursor = m_edit_text.size();
+            break;
+        case TextKey::Enter:
+            end_edit(true);
+            break;
+        case TextKey::Escape:
+            end_edit(false);
+            break;
+        }
+    }
+    refresh();
 }
 
 void SettingsMenu::move_row(int direction) {
@@ -248,6 +388,10 @@ void SettingsMenu::move_page(int direction) {
 void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_text_editing.load()) {
+            edit_button(button);
+            goto done;
+        }
         Row *row = nullptr;
         if (!m_pages.empty() && m_row < m_pages[m_page].rows.size())
             row = &m_pages[m_page].rows[m_row];
@@ -296,6 +440,7 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
             break;
         }
     }
+done:
     refresh();
 }
 
@@ -356,13 +501,26 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
             const std::string arrows_r = (arrows_l.empty() ? "" : "  >") + std::string(row.needs_restart ? "  *" : "");
             constexpr uint16_t VALUE_W = PANEL_W - 284;
             std::string value = !row.exit ? shown_value(row) : !selected ? "" : m_exit_armed ? "Cross again to exit" : "Cross (X)";
-            label value_label = text(arrows_l + value + arrows_r, PANEL_X + 250, y + 6, VALUE_W, 24, 16,
+            const bool editing = selected && m_text_editing.load();
+            if (editing) {
+                // the text being edited, the cursor's character in brackets ([ ] at the end: a new one)
+                value = m_edit_text.substr(0, m_edit_cursor) + "["
+                    + (m_edit_cursor < m_edit_text.size() ? m_edit_text.substr(m_edit_cursor, 1) : std::string(" ")) + "]"
+                    + (m_edit_cursor < m_edit_text.size() ? m_edit_text.substr(m_edit_cursor + 1) : std::string());
+            }
+            label value_label = text(editing ? value : arrows_l + value + arrows_r, PANEL_X + 250, y + 6, VALUE_W, 24, 16,
                 row.exit && m_exit_armed ? ACCENT : row.editable ? TEXT : TEXT_DIM, overlay_element::right);
             uint16_t value_w = 0, value_h = 0;
             value_label.measure_text(value_w, value_h, true);
             while (value_w > VALUE_W && !value.empty()) {
-                value.pop_back();
-                value_label.set_text(arrows_l + value + "..." + arrows_r);
+                // an edited text loses its start (the cursor is usually at the end), any other its end
+                if (editing) {
+                    value.erase(0, 1);
+                    value_label.set_text("..." + value);
+                } else {
+                    value.pop_back();
+                    value_label.set_text(arrows_l + value + "..." + arrows_r);
+                }
                 value_label.measure_text(value_w, value_h, true);
             }
             result.add(value_label.get_compiled());
@@ -382,6 +540,8 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
         std::replace(help.begin(), help.end(), '\n', ' ');
         if (!row.editable)
             help += (help.empty() ? "" : " ") + std::string("Change it in the settings file.");
+        else if (row.spec.text_entry && !m_text_editing.load())
+            help += (help.empty() ? "" : " ") + std::string("Cross: edit.");
     }
     // the help gets the space down to the restart note or the hints; a longer one is cut at a word
     const int16_t note_y = FOOTER_Y - 24;
@@ -406,10 +566,13 @@ void SettingsMenu::on_button_pressed(pad_button button, bool /*is_auto_repeat*/)
 
     // the controls: a gamepad's, and on a PC the keyboard's too
 #ifdef __ANDROID__
-    const char *const hints = "Up/Down: choose    Left/Right, Cross: change    L1/R1: page    Circle: close";
+    const char *const menu_hints = "Up/Down: choose    Left/Right, Cross: change    L1/R1: page    Circle: close";
 #else
-    const char *const hints = "Up/Down: choose    Left/Right, Cross: change    L1/R1 (Q/E): page    Circle (C), Esc, F1: close";
+    const char *const menu_hints = "Up/Down: choose    Left/Right, Cross: change    L1/R1 (Q/E): page    Circle (C), Esc, F1: close";
 #endif
+    const char *const hints = m_text_editing.load()
+        ? "Type, or Up/Down: character    Left/Right: move    Square: delete    Cross, Enter: done    Circle, Esc: cancel"
+        : menu_hints;
     result.add(text(hints, PANEL_X + 24, FOOTER_Y, PANEL_W - 48, 20, 12, TEXT_DIM, overlay_element::center).get_compiled());
     return result;
 }

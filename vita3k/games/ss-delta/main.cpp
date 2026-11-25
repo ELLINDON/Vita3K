@@ -41,6 +41,7 @@
 #include <util/fs.h>
 #include <util/log.h>
 #include <util/net_utils.h>
+#include <util/string_utils.h>
 
 #include <SDL3/SDL.h>
 #include <stb_image_write.h>
@@ -85,25 +86,46 @@ const char *region_name(const std::string &title_id) {
 // [multiplayer] adapter: Vita3K's adhoc_addr, an index into this PC's network adapters with an
 // address (net_utils::get_all_assigned_addrs, the list Vita3K's own settings show). The settings
 // menu lists them as "address - name" (Vita3K's order; a long name is cut, not the address);
-// without any, it stays a number.
+// auto (the default, adhoc_addr -1): the adapter the machine reaches the first of the peers through,
+// or without peers the one of its default route (net_utils::get_selected_assigned_addr).
 SettingSpec adapter_setting() {
 #ifdef __ANDROID__
     const char *const help = "The network adapter Ad Hoc Play uses: the one in the same network as the other players\n"
-                             "(usually the Wi-Fi). 0 is the first of this device's adapters with an address.";
+                             "(usually the Wi-Fi). auto: the one that reaches the first of the peers, else the internet's.";
 #else
     const char *const help = "The network adapter LAN play uses (network = lan): the one in the same network as the other\n"
-                             "PCs. 0 is the first of this PC's adapters with an address.";
+                             "PCs. auto: the one that reaches the first of the peers (Tailscale's for a Tailscale address),\n"
+                             "else the one of the internet connection (the home network's).";
 #endif
-    SettingSpec s{ "adapter", Kind::Int, "0", 0, 63, {}, help, true };
+    SettingSpec s{ "adapter", Kind::Choice, "auto", 0, 0, { "auto" }, help, true };
     s.title = "Network adapter";
+    s.choice_labels.push_back("auto");
     const auto addrs = net_utils::get_all_assigned_addrs();
-    if (!addrs.empty()) {
-        s.kind = Kind::Choice;
-        for (size_t i = 0; i < addrs.size(); i++) {
-            s.choices.push_back(std::to_string(i));
-            s.choice_labels.push_back(addrs[i].name.empty() ? addrs[i].addr : addrs[i].addr + " - " + addrs[i].name);
-        }
+    for (size_t i = 0; i < addrs.size(); i++) {
+        s.choices.push_back(std::to_string(i));
+        s.choice_labels.push_back(addrs[i].name.empty() ? addrs[i].addr : addrs[i].addr + " - " + addrs[i].name);
     }
+    return s;
+}
+
+// [multiplayer] adapter as Vita3K's adhoc_addr: auto is -1
+int adapter_index(const std::string &value) {
+    if (value.empty() || string_utils::tolower(value) == "auto")
+        return -1;
+    return std::max(0, std::atoi(value.c_str()));
+}
+
+// [multiplayer] peers: typed in the settings menu too (a keyboard, or Up/Down through digits, dots,
+// letters for a host name and commas), and applied at once (frontend.cpp)
+SettingSpec peers_setting() {
+    SettingSpec s{ "peers", Kind::Text, "", 0, 0, {},
+        "lan, over Tailscale or another network that passes no broadcasts: the host's address (or the other\n"
+        "players', separated by commas), e.g. its Tailscale IP 100.x.y.z or name. Each broadcast also goes to\n"
+        "each, and to every address a packet came from, so the host needs none (docs/TAILSCALE.md)." };
+    s.title = "Peers (host address)";
+    s.live = true;
+    s.text_entry = true;
+    s.text_chars = "0123456789.,abcdefghijklmnopqrstuvwxyz-";
     return s;
 }
 
@@ -244,18 +266,14 @@ game_frontend::IniLayout ini_layout() {
                 "Ad Hoc Play (Librom, Network). local (the default on Windows): copies of the game on this\n"
                 "machine play together. lan (the default on Linux and macOS): machines in one network play\n"
                 "together (Windows, Linux and macOS mixed), as in Vita3K: the copies find each other by UDP\n"
-                "broadcasts on the network adapter set by `adapter` (no address to enter). Windows: allow\n"
-                "ss-delta.exe through the firewall. macOS: allow Local Network access when it asks.\n"
+                "broadcasts on the network adapter set by `adapter`; over Tailscale, through `peers`. Windows:\n"
+                "allow ss-delta.exe through the firewall. macOS: allow Local Network access when it asks.\n"
                 "Start one copy per player: ss-delta.exe is player 1, and \"ss-delta.exe --player 2\"\n"
                 "(run-player2.bat) player 2, up to 4. Each player has a Vita user and saves of its own (player\n"
                 "1's are copied on its first start), and its log and config in ss-delta/player<N>/.\n"
                 "ss-delta-player<N>.ini next to this file overrides settings for player N." },
             adapter_setting(),
-            { "peers", Kind::Text, "", 0, 0, {},
-                "lan: the other players' addresses or host names, separated by commas, for networks that pass\n"
-                "no broadcasts (Tailscale or another VPN, routed subnets). Each broadcast also goes to each of\n"
-                "them, and to every address a packet came from, so one side listing the other is enough (e.g.\n"
-                "the others list the host). Set adapter to the adapter of that network (Tailscale's)." },
+            peers_setting(),
             { "gamepad", Kind::Int, "0", 0, 4, {},
                 "0: every gamepad drives the window in focus. 1-4: only that gamepad, also while the window is in\n"
                 "the background (two players at one PC, a gamepad each; set it in ss-delta-player<N>.ini)." },
@@ -970,28 +988,10 @@ int main(int argc, char *argv[]) {
         // Ad Hoc Play: copies on this PC talk over 127.0.0.<player>; on a network, through an
         // adapter (Vita3K's adhoc-addr). Players 2 and up only read the shader cache player 1 keeps.
         net_utils::set_local_adhoc(values.get("multiplayer.network") == "lan" ? 0 : ctx.player);
-        cfg.adhoc_addr = values.get_int("multiplayer.adapter");
-        // [multiplayer] peers: a broadcast also goes to each (lan mode; net_utils::set_lan_peers)
-        if (values.get("multiplayer.network") == "lan") {
-            std::vector<uint32_t> peers;
-            std::string list = values.get("multiplayer.peers");
-            std::replace(list.begin(), list.end(), ';', ',');
-            for (size_t start = 0; start <= list.size();) {
-                const size_t end = std::min(list.find(',', start), list.size());
-                std::string host = list.substr(start, end - start);
-                start = end + 1;
-                host.erase(0, host.find_first_not_of(" \t"));
-                host.erase(host.find_last_not_of(" \t") + 1);
-                if (host.empty())
-                    continue;
-                const uint32_t addr = net_utils::resolve_ipv4(host);
-                if (addr)
-                    peers.push_back(addr);
-                else
-                    LOG_ERROR("[multiplayer] peers: {} doesn't resolve to an IPv4 address", host);
-            }
-            net_utils::set_lan_peers(peers);
-        }
+        cfg.adhoc_addr = adapter_index(values.get("multiplayer.adapter"));
+        // [multiplayer] peers: a broadcast also goes to each (lan mode; the settings menu changes them live, frontend.cpp)
+        if (values.get("multiplayer.network") == "lan")
+            net_utils::set_lan_peers_text(values.get("multiplayer.peers"));
         cfg.shader_cache_read_only = ctx.player > 1;
         // the fog colour leaves the vertex shaders as COLOR0/COLOR1 and goes above 1 (blue haze in ST02A
         // without the clamp; grey, as on the Vita, with it)

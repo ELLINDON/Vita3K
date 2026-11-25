@@ -25,6 +25,7 @@
 #include <util/string_utils.h>
 
 #include <SDL3/SDL_gamepad.h>
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <cctype>
@@ -45,25 +46,24 @@ std::string trim(const std::string &s) {
 }
 
 std::vector<std::string> split_list(const std::string &s) {
-    std::vector<std::string> out;
-    size_t start = 0;
-    while (start <= s.size()) {
-        const auto comma = s.find(',', start);
-        const auto item = trim(s.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
-        if (!item.empty())
-            out.push_back(item);
-        if (comma == std::string::npos)
-            break;
-        start = comma + 1;
-    }
-    return out;
+    return split_bindings(s);
 }
 
-// A key by its W3C code (KeyX, ArrowUp, ShiftRight ...), a single letter or digit, or the names
-// SDL uses (Up, Return, Left Shift, Keypad 1 ...)
+// the mouse buttons a binding can name (mouse_button_code), by SDL_BUTTON_*
+constexpr uint32_t MOUSE_PAGE = 0x090000;
+const std::pair<int, const char *> mouse_names[] = { { 1, "MouseLeft" }, { 3, "MouseRight" }, { 4, "MouseX1" }, { 5, "MouseX2" } };
+
+// A key by its W3C code (KeyX, ArrowUp, ShiftRight ...), a single letter or digit, the names SDL uses
+// (Up, Return, Left Shift, Keypad 1 ...), or a mouse button (MouseX1, Mouse4 ...)
 PhysicalKeyCode parse_key(const std::string &name) {
     if (const auto code = input::physical_key_from_code_name(name); code != PhysicalKeyCode::Unbound)
         return code;
+    {
+        const std::string lower = string_utils::tolower(name);
+        for (const auto &[button, mouse] : mouse_names)
+            if (lower == string_utils::tolower(mouse) || lower == "mouse" + std::to_string(button))
+                return mouse_button_code(button);
+    }
     if (name.size() == 1 && std::isalpha(static_cast<unsigned char>(name[0])))
         return input::physical_key_from_code_name(std::string("Key") + static_cast<char>(std::toupper(static_cast<unsigned char>(name[0]))));
     if (name.size() == 1 && std::isdigit(static_cast<unsigned char>(name[0])))
@@ -88,17 +88,178 @@ PhysicalKeyCode parse_key(const std::string &name) {
 }
 
 SDL_GamepadButton parse_gamepad_button(const std::string &name) {
+    return static_cast<SDL_GamepadButton>(gamepad_button_from_name(name));
+}
+
+} // namespace
+
+const std::vector<ButtonBinding> &button_bindings() {
+    static const std::vector<ButtonBinding> bindings{
+        { "cross", "Cross", "X", "south", "" },
+        { "circle", "Circle", "C", "east", "" },
+        { "square", "Square", "Z", "west", "" },
+        { "triangle", "Triangle", "V", "north", "" },
+        { "l", "L", "Q", "leftshoulder", "" },
+        { "r", "R", "E", "rightshoulder", "" },
+        { "start", "Start", "Return", "start", "" },
+        { "select", "Select", "Right Shift", "back", "" },
+        { "up", "D-pad up", "Up", "dpup", "" },
+        { "down", "D-pad down", "Down", "dpdown", "" },
+        { "left", "D-pad left", "Left", "dpleft", "" },
+        { "right", "D-pad right", "Right", "dpright", "" },
+        { "analog_up", "Left stick up", "W", "", "Left stick" },
+        { "analog_down", "Left stick down", "S", "", "Left stick" },
+        { "analog_left", "Left stick left", "A", "", "Left stick" },
+        { "analog_right", "Left stick right", "D", "", "Left stick" },
+        { "right_analog_up", "Right stick up", "I", "", "Right stick" },
+        { "right_analog_down", "Right stick down", "K", "", "Right stick" },
+        { "right_analog_left", "Right stick left", "J", "", "Right stick" },
+        { "right_analog_right", "Right stick right", "L", "", "Right stick" },
+        // a PS TV's DualShock: the triggers always press them (ctrl.cpp, apply_controller)
+        { "l2", "L2 (PS TV)", "U", "", "LT", false },
+        { "r2", "R2 (PS TV)", "O", "", "RT", false },
+    };
+    return bindings;
+}
+
+std::string default_keyboard_lines() {
+    std::string out;
+    for (const auto &b : button_bindings())
+        if (b.in_default_file)
+            out += fmt::format("{} = {}\n", b.name, b.keys);
+    return out;
+}
+
+std::string default_gamepad_lines() {
+    std::string out;
+    for (const auto &b : button_bindings())
+        if (*b.gamepad)
+            out += fmt::format("{} = {}\n", b.name, b.gamepad);
+    return out;
+}
+
+std::vector<std::string> split_bindings(const std::string &s) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= s.size()) {
+        const auto comma = s.find(',', start);
+        const auto item = trim(s.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        if (!item.empty())
+            out.push_back(item);
+        if (comma == std::string::npos)
+            break;
+        start = comma + 1;
+    }
+    return out;
+}
+
+PhysicalKeyCode mouse_button_code(int sdl_button) {
+    return static_cast<PhysicalKeyCode>(MOUSE_PAGE | (sdl_button & 0xff));
+}
+
+PhysicalKeyCode key_from_name(const std::string &name) {
+    return parse_key(trim(name));
+}
+
+std::string key_name(PhysicalKeyCode code) {
+    for (const auto &[button, mouse] : mouse_names)
+        if (code == mouse_button_code(button))
+            return mouse;
+    const std::string w3c(input::physical_key_code_name(code));
+    if (w3c.empty())
+        return {};
+    if (w3c.size() == 4 && w3c.starts_with("Key"))
+        return w3c.substr(3);
+    if (w3c.size() == 6 && w3c.starts_with("Digit"))
+        return w3c.substr(5);
+    if (w3c.starts_with("Arrow"))
+        return w3c.substr(5);
+    if (w3c.size() == 7 && w3c.starts_with("Numpad") && std::isdigit(static_cast<unsigned char>(w3c[6])))
+        return "Keypad " + w3c.substr(6);
+    static const std::map<std::string, std::string> names{
+        { "ShiftLeft", "Left Shift" }, { "ShiftRight", "Right Shift" }, { "ControlLeft", "Left Ctrl" },
+        { "ControlRight", "Right Ctrl" }, { "AltLeft", "Left Alt" }, { "AltRight", "Right Alt" },
+        { "NumpadEnter", "Keypad Enter" },
+    };
+    if (const auto it = names.find(w3c); it != names.end())
+        return it->second;
+    return w3c; // F1, Enter, Space, Tab, Backspace, Escape, Comma ...: the W3C code reads back as it is
+}
+
+std::string key_cap_text(PhysicalKeyCode code) {
+    static const std::map<std::string, std::string> short_forms{
+        { "Space", "SPC" }, { "Enter", "ENT" }, { "NumpadEnter", "ENT" }, { "Tab", "TAB" }, { "Backspace", "BS" },
+        { "Escape", "ESC" }, { "ShiftLeft", "SHF" }, { "ShiftRight", "SHF" }, { "ControlLeft", "CTL" },
+        { "ControlRight", "CTL" }, { "AltLeft", "ALT" }, { "AltRight", "ALT" }, { "MetaLeft", "WIN" },
+        { "MetaRight", "WIN" }, { "CapsLock", "CAP" }, { "Insert", "INS" }, { "Delete", "DEL" }, { "Home", "HOM" },
+        { "End", "END" }, { "PageUp", "PGU" }, { "PageDown", "PGD" }, { "Comma", "," }, { "Period", "." },
+        { "Slash", "/" }, { "Backslash", "\\" }, { "Semicolon", ";" }, { "Quote", "'" }, { "BracketLeft", "[" },
+        { "BracketRight", "]" }, { "Minus", "-" }, { "Equal", "=" }, { "Backquote", "`" }, { "NumpadAdd", "+" },
+        { "NumpadSubtract", "-" }, { "NumpadMultiply", "*" }, { "NumpadDivide", "/" }, { "NumpadDecimal", "." },
+        { "ArrowUp", std::string(1, KEYCAP_UP) }, { "ArrowDown", std::string(1, KEYCAP_DOWN) },
+        { "ArrowLeft", std::string(1, KEYCAP_LEFT) }, { "ArrowRight", std::string(1, KEYCAP_RIGHT) },
+    };
+    static const std::map<int, std::string> mouse_forms{ { 1, "LMB" }, { 3, "RMB" }, { 4, "M4" }, { 5, "M5" } };
+    for (const auto &[button, text] : mouse_forms)
+        if (code == mouse_button_code(button))
+            return text;
+    const std::string w3c(input::physical_key_code_name(code));
+    if (const auto it = short_forms.find(w3c); it != short_forms.end())
+        return it->second;
+    const std::string name = key_name(code);
+    if (name.starts_with("Keypad "))
+        return name.substr(7);
+    if (name.size() <= 3)
+        return string_utils::toupper(name); // X, 1, F5, F12
+    // anything else: its first letters
+    std::string out;
+    for (const char c : name)
+        if (std::isalnum(static_cast<unsigned char>(c)) && out.size() < 3)
+            out += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return out;
+}
+
+int gamepad_button_from_name(const std::string &name) {
     static const std::map<std::string, SDL_GamepadButton> names{
         { "south", SDL_GAMEPAD_BUTTON_SOUTH }, { "east", SDL_GAMEPAD_BUTTON_EAST },
         { "west", SDL_GAMEPAD_BUTTON_WEST }, { "north", SDL_GAMEPAD_BUTTON_NORTH },
     };
-    const std::string lower = string_utils::tolower(name);
+    const std::string lower = string_utils::tolower(trim(name));
     if (const auto it = names.find(lower); it != names.end())
         return it->second;
     return SDL_GetGamepadButtonFromString(lower.c_str());
 }
 
-} // namespace
+std::string gamepad_button_name(int button) {
+    switch (button) {
+    case SDL_GAMEPAD_BUTTON_SOUTH: return "south";
+    case SDL_GAMEPAD_BUTTON_EAST: return "east";
+    case SDL_GAMEPAD_BUTTON_WEST: return "west";
+    case SDL_GAMEPAD_BUTTON_NORTH: return "north";
+    default: break;
+    }
+    const char *name = SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(button));
+    return name ? name : "";
+}
+
+std::string gamepad_display_name(const std::string &name) {
+    const std::string lower = string_utils::tolower(trim(name));
+    static const std::map<std::string, std::string> labels{
+        { "south", "A" }, { "a", "A" }, { "east", "B" }, { "b", "B" }, { "west", "X" }, { "x", "X" },
+        { "north", "Y" }, { "y", "Y" }, { "leftshoulder", "LB" }, { "rightshoulder", "RB" },
+        { "lefttrigger", "LT" }, { "righttrigger", "RT" }, { "start", "Menu" }, { "back", "View" },
+        { "guide", "Guide" }, { "leftstick", "LS click" }, { "rightstick", "RS click" }, { "dpup", "D-pad up" },
+        { "dpdown", "D-pad down" }, { "dpleft", "D-pad left" }, { "dpright", "D-pad right" }, { "misc1", "Share" },
+        { "touchpad", "Touchpad" }, { "paddle1", "Paddle 1" }, { "paddle2", "Paddle 2" }, { "paddle3", "Paddle 3" },
+        { "paddle4", "Paddle 4" },
+    };
+    if (const auto it = labels.find(lower); it != labels.end())
+        return it->second;
+    std::string out = trim(name);
+    if (!out.empty())
+        out[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(out[0])));
+    return out;
+}
 
 void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keyboard,
     const std::map<std::string, std::string> &gamepad, std::vector<std::string> &warnings) {
@@ -170,8 +331,12 @@ void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keybo
             continue;
         }
         const auto list = split_list(value);
-        if (list.empty())
+        if (list.empty()) {
+            // no gamepad button presses it
+            if (static_cast<size_t>(it->second) < cfg.controller_binds.size())
+                cfg.controller_binds[it->second] = static_cast<short>(SDL_GAMEPAD_BUTTON_INVALID);
             continue;
+        }
         if (list.size() > 1)
             warnings.push_back("gamepad." + name + ": one gamepad button per Vita button, the rest are ignored");
         const SDL_GamepadButton button = parse_gamepad_button(list[0]);
@@ -203,6 +368,17 @@ std::vector<PhysicalKeyCode> parse_keys(const std::string &list, const std::stri
 void Keyboard::key(EmuEnvState &emuenv, int scancode, bool is_pressed) {
     const auto code = key_from_scancode(scancode);
     if (input::physical_key_code_name(code).empty())
+        return;
+    if (is_pressed)
+        pressed.insert(code);
+    else
+        pressed.erase(code);
+    update(emuenv);
+}
+
+void Keyboard::mouse_button(EmuEnvState &emuenv, int sdl_button, bool is_pressed) {
+    const auto code = mouse_button_code(sdl_button);
+    if (is_pressed == pressed.contains(code))
         return;
     if (is_pressed)
         pressed.insert(code);

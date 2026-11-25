@@ -58,6 +58,9 @@ struct Context {
     std::string user_id; // the Vita user of this player ("00" for player 1)
     std::string window_name;
     std::vector<std::string> args; // the command line, without the executable
+    // the device the player used last (a key or mouse button, or a gamepad), for button prompts that
+    // follow it ([game] button_labels = auto)
+    InputDevice last_input = InputDevice::None;
 };
 
 struct Hooks {

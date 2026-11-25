@@ -37,24 +37,75 @@ struct EmuEnvState;
 
 namespace game_frontend {
 
+// A Vita button as [keyboard] and [gamepad] name it, with its defaults (the default file's; l2 and r2:
+// Vita3K's, which the default file leaves out) and its name on the settings menu's Controls page
+struct ButtonBinding {
+    const char *name; // the key in [keyboard] and [gamepad]
+    const char *title;
+    const char *keys; // the default keys, as in [keyboard]
+    const char *gamepad; // the default gamepad button, as in [gamepad]; empty: [gamepad] has no line for it
+    const char *fixed_gamepad; // what drives it on a gamepad when [gamepad] can't change it (a stick, a trigger)
+    bool in_default_file = true; // [keyboard] in the default file has a line for it
+};
+const std::vector<ButtonBinding> &button_bindings();
+// the default file's [keyboard] and [gamepad] lines, from button_bindings()
+std::string default_keyboard_lines();
+std::string default_gamepad_lines();
+
 // Applies [keyboard] and [gamepad] (Vita button -> keys / gamepad button) to the config; lines
-// that can't be used are added to `warnings`.
+// that can't be used are added to `warnings`. An empty value unbinds the Vita button; a line left
+// out keeps the binding the config has.
 void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keyboard,
     const std::map<std::string, std::string> &gamepad, std::vector<std::string> &warnings);
 
 // an SDL scancode as a physical key code (both are USB HID keyboard usages)
 input::PhysicalKeyCode key_from_scancode(int scancode);
+// A mouse button (SDL_BUTTON_LEFT ...) as a key code of its own (HID's Button page, beside the
+// keyboard's): [keyboard] and [touch] take MouseX1 and MouseX2 (the side buttons), and MouseLeft and
+// MouseRight, which press their Vita button only while the mouse camera has the cursor (the touchscreen
+// otherwise). The middle button captures the cursor and is none.
+input::PhysicalKeyCode mouse_button_code(int sdl_button);
+// a key as [keyboard] names it (a W3C code, a letter or digit, SDL's names, MouseX1 ...); Unbound if unknown
+input::PhysicalKeyCode key_from_name(const std::string &name);
+// a key's name as the settings menu shows it and writes it to [keyboard] (key_from_name reads it back):
+// X, 1, F5, Up, Enter, Space, Left Shift, Keypad 1, MouseX1, or the W3C code (Comma, BracketLeft ...)
+std::string key_name(input::PhysicalKeyCode code);
+// a key in a button prompt's keycap: up to three characters (X, 1, F12, SPC, ENT, SHF, ...); the
+// arrows are the characters below, which button_labels.cpp draws as arrows
+std::string key_cap_text(input::PhysicalKeyCode code);
+inline constexpr char KEYCAP_UP = '\x11', KEYCAP_DOWN = '\x12', KEYCAP_LEFT = '\x13', KEYCAP_RIGHT = '\x14';
+// a comma-separated list, trimmed, empty items left out
+std::vector<std::string> split_bindings(const std::string &list);
 // up to two keys, comma separated, named as in [keyboard]; an unknown name adds "<setting>: unknown key"
 // to `warnings`
 std::vector<input::PhysicalKeyCode> parse_keys(const std::string &list, const std::string &setting, std::vector<std::string> &warnings);
+// a gamepad button as [gamepad] names it (south, east, west, north, or SDL's names: leftshoulder,
+// dpup ...): an SDL_GamepadButton, or -1
+int gamepad_button_from_name(const std::string &name);
+// the name [gamepad] gets for an SDL_GamepadButton (south ... north for the face buttons)
+std::string gamepad_button_name(int button);
+// a [gamepad] (or [touch] _gamepad) name as the settings menu shows it, by an Xbox pad's labels: A, B,
+// X, Y, LB, RB, LT, RT, Menu, View, D-pad up ...
+std::string gamepad_display_name(const std::string &name);
+
+// the device the player used last, for button prompts that follow it (button_labels = auto)
+enum class InputDevice {
+    None, // nothing yet
+    Keyboard, // a key, or a mouse button
+    Gamepad,
+};
 
 // Keys held down, turned into buttons and stick axes in the controller's keyboard state
 class Keyboard {
 public:
     // an SDL scancode went down or up
     void key(EmuEnvState &emuenv, int scancode, bool pressed);
+    // a mouse button (SDL_BUTTON_X1 ...) went down or up, as a binding (mouse_button_code)
+    void mouse_button(EmuEnvState &emuenv, int sdl_button, bool pressed);
     // the window lost focus: release everything
     void release_all(EmuEnvState &emuenv);
+    // the bindings changed (the settings menu): the held keys pressed again through them
+    void refresh(EmuEnvState &emuenv) { update(emuenv); }
     bool down(input::PhysicalKeyCode code) const { return pressed.contains(code); }
 
 private:

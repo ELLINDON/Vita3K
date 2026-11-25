@@ -83,6 +83,7 @@ struct TouchBinding {
     float x = 0, y = 0; // 960x544 screen pixels
     std::string keys; // up to two, as in [keyboard]
     std::string gamepad; // one button as in [gamepad], or lefttrigger / righttrigger
+    std::string title; // the settings menu's Controls page's name for it (a game's own); empty: from `name`
 };
 
 // Every declared setting with its checked value (the default where the file has none or an

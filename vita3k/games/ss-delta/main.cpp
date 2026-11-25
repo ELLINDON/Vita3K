@@ -851,9 +851,12 @@ std::vector<game_frontend::ButtonAtlas> button_atlases() {
 }
 
 // --button-labels-test <in> <out>: the labels drawn on the one-texture GXT files in <in> (extracted
-// from the game's archives, tools/lspk.py) as PNGs in <out>, at [display] scale; [gamepad] as set
+// from the game's archives, tools/lspk.py) as PNGs in <out>, at [display] scale; [gamepad] and [keyboard]
+// as set. Keyboard labels with [game] button_labels = keyboard (--set game.button_labels=keyboard), Xbox
+// ones otherwise
 int button_labels_test(game_frontend::ButtonLabels &labels, const game_frontend::Settings &settings, const fs::path &in, const fs::path &out) {
-    labels.configure("xbox", settings.gamepad, static_cast<int>(std::lround(settings.scale)));
+    const std::string style = settings.values.get("game.button_labels") == "keyboard" ? "keyboard" : "xbox";
+    labels.configure(style, settings.gamepad, static_cast<int>(std::lround(settings.scale)), {}, settings.keyboard);
     fs::create_directories(out);
     int written = 0;
     for (const auto &entry : fs::directory_iterator(in)) {
@@ -918,7 +921,7 @@ int main(int argc, char *argv[]) {
     profile.name = "Soul Sacrifice Delta";
     profile.id = "ss-delta";
     profile.ini = ini_layout();
-    profile.default_touches = { { "black_rite", 56, 494, "F", "lefttrigger" } };
+    profile.default_touches = { { "black_rite", 56, 494, "F", "lefttrigger", "Black Rite (touch)" } };
     // the lock-on is L held: on a phone's on-screen controls, a toggle holds it (the owner, 2026-11-21)
     profile.screen_latch = { SCE_CTRL_L1, "LOCK" };
     // how fast the right stick turns the camera (degrees a second, by push along one axis), measured with
@@ -938,7 +941,8 @@ int main(int argc, char *argv[]) {
                     "  --slot <1-3>                the game's save slot for the two above (default 1)\n"
                     "  --quiet                     no message box for the two above (the result is in the log)\n"
                     "Development:\n"
-                    "  --button-labels-test <in> <out>  the Xbox button labels drawn on the textures (.gxt) in\n"
+                    "  --button-labels-test <in> <out>  the Xbox button labels (keyboard ones with --set\n"
+                    "                              game.button_labels=keyboard) drawn on the textures (.gxt) in\n"
                     "                              <in>, as PNGs in <out>; then quit\n";
 
     auto &hooks = profile.hooks;
@@ -1065,12 +1069,14 @@ int main(int argc, char *argv[]) {
         if (ctx.settings->values.get_bool("game.sortiara_ally"))
             ss_delta::add_sortiara_ally(*ctx.emuenv, allies);
         if (renderer::TextureCache *cache = ctx.emuenv->renderer ? ctx.emuenv->renderer->get_texture_cache() : nullptr) {
-            // auto: from the first connected gamepad's own labels (it may change while the game runs)
+            // auto: the device used last, and the first connected gamepad's own labels (both may change
+            // while the game runs)
             std::string style = ctx.settings->values.get("game.button_labels");
             std::map<std::string, std::string> face;
             if (style == "auto")
-                style = game_frontend::auto_button_style(ctx.emuenv->ctrl, face);
-            const bool changed = button_labels.configure(style, ctx.settings->gamepad, static_cast<int>(std::lround(ctx.settings->scale)), face);
+                style = game_frontend::auto_button_style(ctx.emuenv->ctrl, face, ctx.last_input);
+            const bool changed = button_labels.configure(style, ctx.settings->gamepad, static_cast<int>(std::lround(ctx.settings->scale)), face,
+                    ctx.settings->keyboard);
             if (cache->texture_override.load() != &button_labels) {
                 cache->texture_override = &button_labels;
                 cache->refresh_texture_override();

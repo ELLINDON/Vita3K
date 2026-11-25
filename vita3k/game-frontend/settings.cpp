@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include "settings.h"
+#include "input.h"
 
 #include <util/fs.h>
 #include <util/string_utils.h>
@@ -596,13 +597,12 @@ IniSection keyboard(const std::string &extra_help) {
         "Right, Return, Space, Tab, Backspace, Escape, Left Shift, Right Shift, Left Ctrl, Right Ctrl,\n"
         "Left Alt, Right Alt, F1-F12, Keypad 0-9, or the W3C key codes (Comma, Period, Slash, Semicolon,\n"
         "Quote, BracketLeft, Minus, Equal ...). Also l2 and r2 (U and O unless set), a PS TV's L2/R2.\n"
-        "The mouse is the touchscreen: left button front, right button rear."
+        "Mouse buttons: MouseX1, MouseX2 (the side buttons), and MouseLeft, MouseRight, which press their\n"
+        "button only while the mouse camera has the cursor; otherwise the mouse is the touchscreen (left\n"
+        "button front, right button rear). The settings menu's Controls page changes them too."
             + (extra_help.empty() ? "" : "\n" + extra_help) };
     s.free_keys = true;
-    s.body = "cross = X\ncircle = C\nsquare = Z\ntriangle = V\nl = Q\nr = E\nstart = Return\nselect = Right Shift\n"
-             "up = Up\ndown = Down\nleft = Left\nright = Right\n"
-             "analog_up = W\nanalog_down = S\nanalog_left = A\nanalog_right = D\n"
-             "right_analog_up = I\nright_analog_down = K\nright_analog_left = J\nright_analog_right = L\n";
+    s.body = default_keyboard_lines();
     return s;
 }
 
@@ -610,10 +610,9 @@ IniSection gamepad() {
     IniSection s{ "gamepad",
         "Vita button = one gamepad button: south, east, west, north (the face buttons; on an Xbox pad\n"
         "A, B, X, Y), leftshoulder, rightshoulder, start, back, guide, dpup, dpdown, dpleft, dpright,\n"
-        "leftstick, rightstick. The gamepad's sticks are the Vita's sticks." };
+        "leftstick, rightstick; nothing after the = unbinds it. The gamepad's sticks are the Vita's sticks." };
     s.free_keys = true;
-    s.body = "cross = south\ncircle = east\nsquare = west\ntriangle = north\nl = leftshoulder\nr = rightshoulder\n"
-             "start = start\nselect = back\nup = dpup\ndown = dpdown\nleft = dpleft\nright = dpright\n";
+    s.body = default_gamepad_lines();
     return s;
 }
 
@@ -651,7 +650,8 @@ IniSection touch(const std::string &body) {
         "Keys and gamepad buttons that hold a finger on the touchscreen for as long as they are held.\n"
         "Each touch is <name> = x, y (a point on the 960x544 screen), with <name>_key (up to two keys,\n"
         "as in [keyboard]) and <name>_gamepad (one button as in [gamepad], or lefttrigger or\n"
-        "righttrigger). The mouse is the touchscreen as well." };
+        "righttrigger). The mouse is the touchscreen as well. The settings menu's Controls page changes\n"
+        "the keys and buttons." };
     s.free_keys = true;
     s.body = body;
     return s;

@@ -979,8 +979,31 @@ int run(Profile &profile, int argc, char *argv[]) {
         std::string error;
         if (!save_setting(settings_file(ctx.exe_dir, profile.id, ctx.player), change.section, change.key, change.value, error))
             LOG_ERROR("Settings menu: {}", error);
-        settings.values.values[change.section + "." + change.key] = change.value;
         LOG_INFO("Settings menu: [{}] {} = {}", change.section, change.key, change.value);
+        // the Controls page: [keyboard], [gamepad] and [touch], applied at once
+        if (change.section == "keyboard" || change.section == "gamepad" || change.section == "touch") {
+            settings.values.free_sections[change.section][change.key] = change.value;
+            std::vector<std::string> warnings;
+            if (change.section == "touch") {
+                const bool keys = change.key.ends_with("_key");
+                const std::string name = change.key.substr(0, change.key.size() - (keys ? 4 : 8));
+                for (auto &touch : settings.touches)
+                    if (touch.name == name)
+                        (keys ? touch.keys : touch.gamepad) = change.value;
+                touches.configure(settings.touches, warnings, profile.touch_targets);
+            } else {
+                const bool is_keyboard = change.section == "keyboard";
+                (is_keyboard ? settings.keyboard : settings.gamepad)[change.key] = change.value;
+                const std::map<std::string, std::string> line{ { change.key, change.value } };
+                apply_bindings(emuenv.cfg, is_keyboard ? line : std::map<std::string, std::string>{},
+                    is_keyboard ? std::map<std::string, std::string>{} : line, warnings);
+                keyboard.refresh(emuenv);
+            }
+            for (const auto &warning : warnings)
+                LOG_WARN("Settings menu: {}", warning);
+            return;
+        }
+        settings.values.values[change.section + "." + change.key] = change.value;
         const std::string key = change.section + "." + change.key;
         if (key == "display.fullscreen" && window)
             SDL_SetWindowFullscreen(window, change.value == "true");
@@ -1009,7 +1032,7 @@ int run(Profile &profile, int argc, char *argv[]) {
     const auto open_menu = [&] {
         if (menu || !session_ptr || !emuenv.overlay_manager || !emuenv.renderer)
             return;
-        menu = emuenv.overlay_manager->create<SettingsMenu>(profile.ini, settings.values, profile.name);
+        menu = emuenv.overlay_manager->create<SettingsMenu>(profile.ini, settings.values, profile.name, settings.touches, profile.default_touches);
         emuenv.renderer->hide_pause_overlay = true;
         session_ptr->set_pause_reason(app::AppSessionPauseReason::Menu, true);
         emuenv.overlay_manager->attach_thread_input("settings_menu", menu);
@@ -1109,11 +1132,36 @@ int run(Profile &profile, int argc, char *argv[]) {
                 return;
             }
         }
+        // a Controls page binding waiting for its new key or button: the input goes to it and nowhere
+        // else (releases still reach the keyboard state)
+        if (menu && menu->binding_wait()) {
+            switch (event.type) {
+            case SDL_EVENT_KEY_DOWN:
+                if (event.key.key == SDLK_F1)
+                    close_menu();
+                else if (!event.key.repeat)
+                    menu->bind_key(event.key.scancode);
+                return;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                menu->bind_mouse(event.button.button);
+                return;
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+                menu->bind_gamepad_button(event.gbutton.button);
+                return;
+            case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+                if ((event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || event.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) && event.gaxis.value > 16384)
+                    menu->bind_gamepad_trigger(event.gaxis.axis);
+                break;
+            default:
+                break;
+            }
+        }
         switch (event.type) {
         case SDL_EVENT_KEY_DOWN:
             if (event.key.repeat)
                 break;
             other_input_used();
+            ctx.last_input = InputDevice::Keyboard;
             if (mouse_camera_on() && !menu
                 && std::find(capture_keys.begin(), capture_keys.end(), key_from_scancode(event.key.scancode)) != capture_keys.end()) {
                 // the capture key captures or releases the cursor, and is no Vita button then
@@ -1158,11 +1206,22 @@ int run(Profile &profile, int argc, char *argv[]) {
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
             mouse_used();
+            if (down)
+                ctx.last_input = InputDevice::Keyboard;
             if (event.button.button == SDL_BUTTON_MIDDLE && down && mouse_camera_on() && !menu)
                 capture_wanted = !capture_wanted;
-            // the captured cursor touches nothing: it is hidden, and stays where it was captured
-            if (captured)
+            // the side buttons are bindings ([keyboard], [touch]: MouseX1, MouseX2)
+            if (event.button.button == SDL_BUTTON_X1 || event.button.button == SDL_BUTTON_X2) {
+                keyboard.mouse_button(emuenv, event.button.button, down);
                 break;
+            }
+            // the captured cursor touches nothing: it is hidden, and stays where it was captured; its left
+            // and right buttons are bindings then (MouseLeft, MouseRight)
+            if (captured) {
+                if (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT)
+                    keyboard.mouse_button(emuenv, event.button.button, down);
+                break;
+            }
             set_mouse(event.button.x, event.button.y);
             if (event.button.button == SDL_BUTTON_LEFT)
                 touch.mouse_button_left = down;
@@ -1175,13 +1234,17 @@ int run(Profile &profile, int argc, char *argv[]) {
             break;
         // a gamepad hides the cursor while the window has the focus (the cursor is the whole desktop's)
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-            if (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS)
+            if (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) {
                 other_input_used();
+                ctx.last_input = InputDevice::Gamepad;
+            }
             break;
         case SDL_EVENT_GAMEPAD_AXIS_MOTION:
             // past a quarter of the way, so a resting stick's drift doesn't count
-            if (std::abs(event.gaxis.value) > 8192 && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS))
+            if (std::abs(event.gaxis.value) > 8192 && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS)) {
                 other_input_used();
+                ctx.last_input = InputDevice::Gamepad;
+            }
             break;
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
             touch.renderer_focused = true;
@@ -1358,8 +1421,12 @@ int run(Profile &profile, int argc, char *argv[]) {
                     // a finger the mouse held lifts
                     emuenv.touch.mouse_button_left = false;
                     emuenv.touch.mouse_button_right = false;
-                } else
+                } else {
                     mouse_camera.clear(emuenv);
+                    // and the buttons the captured mouse held as bindings let go
+                    keyboard.mouse_button(emuenv, SDL_BUTTON_LEFT, false);
+                    keyboard.mouse_button(emuenv, SDL_BUTTON_RIGHT, false);
+                }
                 LOG_INFO("Mouse camera: cursor {}", captured ? "captured" : "released");
             }
             // motion the test driver sent through the input pipe, as if the captured mouse moved

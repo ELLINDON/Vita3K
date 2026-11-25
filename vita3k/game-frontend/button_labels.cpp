@@ -49,6 +49,9 @@ constexpr float T = STROKE / 2, B = 1 - STROKE / 2, M = 0.5f; // the strokes' to
 constexpr float BOWL = (M - T) / 2; // the radius of B's, R's and S's bowls
 constexpr float GAP = 0.1f; // between two letters
 
+// the symbols that are no character: Xbox's Menu and View, and the ring around a font page's letters
+constexpr char GLYPH_MENU = '\x01', GLYPH_VIEW = '\x02', GLYPH_RING = '\x03';
+
 Stroke line(float x0, float y0, float x1, float y1) { return { false, x0, y0, x1, y1, 0 }; }
 Stroke arc(float cx, float cy, float r, float a0, float a1) { return { true, cx, cy, r, a0, a1 }; }
 
@@ -66,12 +69,69 @@ const Glyph *glyph(char c) {
         const float sx = 0.31f; // S's bowls' centres
         g['S'] = { sx + BOWL + T, { arc(sx, T + BOWL, BOWL, 90, 330), arc(sx, M + BOWL, BOWL, -90, 150) } };
         // Xbox's Menu button (three lines) and View button (two overlapping windows)
-        g['='] = { 1.f, { line(T, 0.2f, 1 - T, 0.2f), line(T, M, 1 - T, M), line(T, 0.8f, 1 - T, 0.8f) } };
+        g[GLYPH_MENU] = { 1.f, { line(T, 0.2f, 1 - T, 0.2f), line(T, M, 1 - T, M), line(T, 0.8f, 1 - T, 0.8f) } };
         const float v0 = 0.62f, v1 = 0.38f;
-        g['%'] = { 1.f, { line(T, T, v0, T), line(v0, T, v0, v1), line(T, T, T, v0), line(T, v0, v1, v0), // the back window, behind
-                            line(v1, v1, B, v1), line(B, v1, B, B), line(B, B, v1, B), line(v1, B, v1, v1) } };
+        g[GLYPH_VIEW] = { 1.f, { line(T, T, v0, T), line(v0, T, v0, v1), line(T, T, T, v0), line(T, v0, v1, v0), // the back window, behind
+                                   line(v1, v1, B, v1), line(B, v1, B, B), line(B, B, v1, B), line(v1, B, v1, v1) } };
         // a ring, around a font page's letters
-        g['o'] = { 1.f, { arc(M, M, M - T, 0, 360) } };
+        g[GLYPH_RING] = { 1.f, { arc(M, M, M - T, 0, 360) } };
+
+        // the rest of the letters, the digits, punctuation and arrows: the keys on a keyboard's keycaps
+        // a rounded box w wide (O, 0), its ends half circles
+        const auto oval = [](float w) {
+            const float r = w / 2 - T;
+            return std::vector<Stroke>{ arc(w / 2, T + r, r, 180, 360), line(w - T, T + r, w - T, B - r), arc(w / 2, B - r, r, 0, 180), line(T, B - r, T, T + r) };
+        };
+        const float rr = 0.235f; // the round letters' corners
+        g['C'] = { 0.62f, { arc(0.31f, T + 0.215f, 0.215f, 180, 330), line(T, T + 0.215f, T, B - 0.215f), arc(0.31f, B - 0.215f, 0.215f, 30, 180) } };
+        g['D'] = { 0.64f, { line(T, T, T, B), line(T, T, 0.31f, T), arc(0.31f, T + rr, rr, -90, 0), line(0.545f, T + rr, 0.545f, B - rr),
+                              arc(0.31f, B - rr, rr, 0, 90), line(0.31f, B, T, B) } };
+        g['E'] = { 0.56f, { line(T, T, T, B), line(T, T, 0.56f - T, T), line(T, M, 0.51f - T, M), line(T, B, 0.56f - T, B) } };
+        g['F'] = { 0.56f, { line(T, T, T, B), line(T, T, 0.56f - T, T), line(T, M, 0.51f - T, M) } };
+        g['G'] = { 0.66f, { arc(0.33f, T + rr, rr, 180, 330), line(T, T + rr, T, B - rr), arc(0.33f, B - rr, rr, 0, 180),
+                              line(0.66f - T, B - rr, 0.66f - T, 0.55f), line(0.66f - T, 0.55f, 0.36f, 0.55f) } };
+        g['H'] = { 0.64f, { line(T, T, T, B), line(0.64f - T, T, 0.64f - T, B), line(T, M, 0.64f - T, M) } };
+        g['I'] = { 0.44f, { line(0.22f, T, 0.22f, B), line(T, T, 0.44f - T, T), line(T, B, 0.44f - T, B) } };
+        g['J'] = { 0.56f, { line(0.56f - T, T, 0.56f - T, B - 0.19f), arc(0.275f, B - 0.19f, 0.19f, 0, 180) } };
+        g['K'] = { 0.62f, { line(T, T, T, B), line(0.62f - T, T, T + 0.02f, 0.6f), line(0.27f, 0.47f, 0.62f - T, B) } };
+        g['M'] = { 0.8f, { line(T, B, T, T), line(T, T, 0.4f, 0.62f), line(0.4f, 0.62f, 0.8f - T, T), line(0.8f - T, T, 0.8f - T, B) } };
+        g['N'] = { 0.66f, { line(T, B, T, T), line(T, T, 0.66f - T, B), line(0.66f - T, B, 0.66f - T, T) } };
+        g['O'] = { 0.66f, oval(0.66f) };
+        g['P'] = { 0.62f, { line(T, T, T, B), line(T, T, b1, T), arc(b1, T + BOWL, BOWL, -90, 90), line(b1, M, T, M) } };
+        g['Q'] = { 0.66f, oval(0.66f) };
+        g['Q'].strokes.push_back(line(0.38f, 0.66f, 0.6f, B));
+        g['T'] = { 0.62f, { line(T, T, 0.62f - T, T), line(0.31f, T, 0.31f, B) } };
+        g['U'] = { 0.64f, { line(T, T, T, B - 0.225f), arc(0.32f, B - 0.225f, 0.225f, 0, 180), line(0.64f - T, B - 0.225f, 0.64f - T, T) } };
+        g['V'] = { 0.68f, { line(T, T, 0.34f, B), line(0.34f, B, 0.68f - T, T) } };
+        g['W'] = { 0.9f, { line(T, T, 0.25f, B), line(0.25f, B, 0.45f, 0.42f), line(0.45f, 0.42f, 0.65f, B), line(0.65f, B, 0.9f - T, T) } };
+        g['Z'] = { 0.62f, { line(T, T, 0.62f - T, T), line(0.62f - T, T, T, B), line(T, B, 0.62f - T, B) } };
+        g['0'] = { 0.6f, oval(0.6f) };
+        g['1'] = { 0.46f, { line(0.3f, T, 0.3f, B), line(0.3f, T, 0.12f, 0.24f) } };
+        g['2'] = { 0.6f, { arc(0.3f, T + 0.205f, 0.205f, 180, 390), line(0.477f, 0.4025f, T, B), line(T, B, 0.6f - T, B) } };
+        g['3'] = { 0.6f, { arc(0.3f, T + BOWL, BOWL, 200, 450), arc(0.3f, M + BOWL, BOWL, -90, 160) } };
+        g['4'] = { 0.62f, { line(0.42f, B, 0.42f, T), line(0.42f, T, T, 0.66f), line(T, 0.66f, 0.62f - T + 0.02f, 0.66f) } };
+        g['5'] = { 0.645f, { line(0.6f - T, T, 0.13f, T), line(0.13f, T, 0.139f, 0.4635f), arc(0.3f, 0.655f, 0.25f, -130, 150) } };
+        g['6'] = { 0.69f, { arc(0.345f, 0.655f, 0.25f, 0, 360), line(0.105f, 0.6f, 0.46f, T) } };
+        g['7'] = { 0.6f, { line(T, T, 0.6f - T, T), line(0.6f - T, T, 0.24f, B) } };
+        g['8'] = { 0.6f, { arc(0.3f, 0.285f, 0.19f, 0, 360), arc(0.3f, 0.69f, 0.215f, 0, 360) } };
+        g['9'] = { 0.69f, { arc(0.345f, 0.345f, 0.25f, 0, 360), line(0.585f, 0.4f, 0.23f, B) } };
+        g[','] = { 0.3f, { line(0.16f, 0.82f, 0.1f, 0.98f) } };
+        g['.'] = { 0.26f, { arc(0.13f, B - 0.01f, 0.01f, 0, 360) } };
+        g[';'] = { 0.3f, { arc(0.15f, 0.4f, 0.01f, 0, 360), line(0.16f, 0.82f, 0.1f, 0.98f) } };
+        g['/'] = { 0.5f, { line(T, B, 0.5f - T, T) } };
+        g['\\'] = { 0.5f, { line(T, T, 0.5f - T, B) } };
+        g['\''] = { 0.26f, { line(0.13f, T, 0.13f, 0.32f) } };
+        g['`'] = { 0.3f, { line(0.1f, T, 0.2f, 0.28f) } };
+        g['['] = { 0.36f, { line(0.3f, T, T, T), line(T, T, T, B), line(T, B, 0.3f, B) } };
+        g[']'] = { 0.36f, { line(0.06f, T, 0.265f, T), line(0.265f, T, 0.265f, B), line(0.265f, B, 0.06f, B) } };
+        g['-'] = { 0.5f, { line(T, M, 0.5f - T, M) } };
+        g['='] = { 0.56f, { line(T, 0.37f, 0.56f - T, 0.37f), line(T, 0.63f, 0.56f - T, 0.63f) } };
+        g['+'] = { 0.6f, { line(T, M, 0.6f - T, M), line(0.3f, 0.25f, 0.3f, 0.75f) } };
+        g['*'] = { 0.56f, { line(0.28f, 0.22f, 0.28f, 0.78f), line(0.14f, 0.36f, 0.42f, 0.64f), line(0.42f, 0.36f, 0.14f, 0.64f) } };
+        g[KEYCAP_UP] = { 0.62f, { line(0.31f, T, 0.31f, B), line(0.31f, T, T, 0.4f), line(0.31f, T, 0.62f - T, 0.4f) } };
+        g[KEYCAP_DOWN] = { 0.62f, { line(0.31f, T, 0.31f, B), line(0.31f, B, T, 0.6f), line(0.31f, B, 0.62f - T, 0.6f) } };
+        g[KEYCAP_LEFT] = { 0.86f, { line(T, M, 0.86f - T, M), line(T, M, 0.4f, 0.2f), line(T, M, 0.4f, 0.8f) } };
+        g[KEYCAP_RIGHT] = { 0.86f, { line(T, M, 0.86f - T, M), line(0.86f - T, M, 0.46f, 0.2f), line(0.86f - T, M, 0.46f, 0.8f) } };
         return g;
     }();
     const auto it = glyphs.find(c);
@@ -151,6 +211,48 @@ void draw_text(Image &img, float cx, float cy, float height, float xscale, float
     }
 }
 
+// a keycap: a rounded rectangle's outline centred on (cx, cy), w x h pixels along the outline's middle,
+// `stroke` pixels wide, in (r, g, b)
+void draw_keycap(Image &img, float cx, float cy, float w, float h, float stroke, uint8_t r, uint8_t g, uint8_t b) {
+    const float radius = std::min(w, h) * 0.28f;
+    const float hx = w / 2 - radius, hy = h / 2 - radius;
+    const int x0 = std::max(0, static_cast<int>(std::floor(cx - w / 2 - stroke)) - 1);
+    const int x1 = std::min<int>(img.w, static_cast<int>(std::ceil(cx + w / 2 + stroke)) + 1);
+    const int y0 = std::max(0, static_cast<int>(std::floor(cy - h / 2 - stroke)) - 1);
+    const int y1 = std::min<int>(img.h, static_cast<int>(std::ceil(cy + h / 2 + stroke)) + 1);
+    for (int py = y0; py < y1; py++) {
+        for (int px = x0; px < x1; px++) {
+            // the distance to the rounded rectangle's edge
+            const float qx = std::abs(px + 0.5f - cx) - hx, qy = std::abs(py + 0.5f - cy) - hy;
+            const float edge = std::hypot(std::max(qx, 0.f), std::max(qy, 0.f)) + std::min(std::max(qx, qy), 0.f) - radius;
+            const float cover = std::clamp(stroke / 2 - std::abs(edge) + 0.5f, 0.f, 1.f);
+            if (cover <= 0)
+                continue;
+            uint8_t *p = img.at(px, py);
+            p[0] = static_cast<uint8_t>(std::lround(p[0] + (r - p[0]) * cover));
+            p[1] = static_cast<uint8_t>(std::lround(p[1] + (g - p[1]) * cover));
+            p[2] = static_cast<uint8_t>(std::lround(p[2] + (b - p[2]) * cover));
+            p[3] = std::max<uint8_t>(p[3], static_cast<uint8_t>(std::lround(cover * 255)));
+        }
+    }
+}
+
+// A key's name in a keycap: the keycap `box_h` pixels tall (its outline's middle), as wide as the name
+// needs but at least square and at most `max_w`; the name about half as tall, smaller and then narrower
+// when it doesn't fit. Returns the keycap's width.
+float keycap_width(const std::string &text, float box_h, float max_w, float stroke, float &text_h, float &xscale) {
+    const float pad = stroke + box_h * 0.14f; // between the outline and the name
+    const float units = text_width(text);
+    text_h = box_h * 0.54f;
+    const float want = std::max(box_h, units * text_h + 2 * pad);
+    const float w = std::min(want, std::max(max_w, box_h * 0.6f));
+    const float room = w - 2 * pad;
+    if (units * text_h > room)
+        text_h = std::max(box_h * 0.4f, room / units);
+    xscale = std::clamp(room / (units * text_h), 0.3f, 1.f);
+    return w;
+}
+
 std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
     return s;
@@ -176,7 +278,7 @@ ButtonLabels::Label label_of(const std::string &name, const std::map<std::string
     }
     static const std::map<std::string, std::string> others{
         { "leftshoulder", "LB" }, { "rightshoulder", "RB" }, { "leftstick", "LS" }, { "rightstick", "RS" },
-        { "start", "=" }, { "back", "%" }
+        { "start", std::string(1, GLYPH_MENU) }, { "back", std::string(1, GLYPH_VIEW) }
     };
     if (const auto it = others.find(button); it != others.end())
         return { it->second, 240, 240, 240 };
@@ -218,26 +320,35 @@ uint64_t fnv1a64(const uint8_t *data, size_t size) {
 }
 
 SettingSpec button_labels_setting() {
-    SettingSpec s{ "button_labels", SettingSpec::Kind::Choice, "playstation", 0, 0, { "playstation", "xbox", "auto" },
+    SettingSpec s{ "button_labels", SettingSpec::Kind::Choice, "playstation", 0, 0, { "playstation", "xbox", "keyboard", "auto" },
         "The buttons the game's prompts show: playstation (the game's own icons), xbox (A, B, X, Y, LB,\n"
         "RB, and Xbox's Menu and View for START and SELECT: the gamepad button that [gamepad] binds to\n"
-        "each Vita button), or auto (xbox while the first gamepad has lettered buttons, with its own\n"
-        "letters; playstation for a PlayStation pad or none). Also in the tutorial pictures and the\n"
-        "text's few button symbols. The D-pad, the sticks and TOUCH are the same on both." };
+        "each Vita button), keyboard (the key [keyboard] binds to each, the first of two, in a keycap:\n"
+        "X, C, Z, V, Q, E, ENT, SHF ...), or auto (the device used last: keyboard after a key or a mouse\n"
+        "button, and for a gamepad xbox while it has lettered buttons, with its own letters, playstation\n"
+        "for a PlayStation pad; before any input, the first gamepad's, or keyboard without one). Also in\n"
+        "the tutorial pictures and the text's few button symbols. The D-pad, the sticks and TOUCH stay." };
     s.live = true;
     s.title = "Button prompts";
-    s.choice_labels = { "PlayStation", "Xbox", "As the gamepad" };
+    s.choice_labels = { "PlayStation", "Xbox", "Keyboard", "As the device used" };
     return s;
 }
 
-std::string auto_button_style(const CtrlState &ctrl, std::map<std::string, std::string> &face) {
+std::string auto_button_style(const CtrlState &ctrl, std::map<std::string, std::string> &face, InputDevice last) {
     face.clear();
+    if (last == InputDevice::Keyboard)
+        return "keyboard";
     const Controller *first = nullptr;
     for (const auto &[_, c] : ctrl.controllers)
         if (c.controller && (!first || c.port < first->port))
             first = &c;
-    if (!first)
-        return "playstation";
+    if (!first) {
+#ifdef __ANDROID__
+        return "playstation"; // the on-screen controls, PlayStation's symbols
+#else
+        return "keyboard";
+#endif
+    }
     static const std::pair<const char *, SDL_GamepadButton> positions[] = {
         { "south", SDL_GAMEPAD_BUTTON_SOUTH }, { "east", SDL_GAMEPAD_BUTTON_EAST },
         { "west", SDL_GAMEPAD_BUTTON_WEST }, { "north", SDL_GAMEPAD_BUTTON_NORTH }
@@ -268,16 +379,17 @@ ButtonLabels::ButtonLabels(std::vector<ButtonAtlas> atlases)
 }
 
 bool ButtonLabels::configure(const std::string &style, const std::map<std::string, std::string> &gamepad, int scale,
-    const std::map<std::string, std::string> &face) {
+    const std::map<std::string, std::string> &face, const std::map<std::string, std::string> &keyboard) {
     scale = std::clamp(scale, 1, 4);
     std::lock_guard lock(m_mutex);
-    if (style == m_style && gamepad == m_gamepad && scale == m_scale && face == m_face)
+    if (style == m_style && gamepad == m_gamepad && scale == m_scale && face == m_face && keyboard == m_keyboard)
         return false;
-    const bool was_enabled = m_style == "xbox";
+    const bool was_enabled = m_style == "xbox" || m_style == "keyboard";
     m_style = style;
     m_gamepad = gamepad;
     m_scale = scale;
     m_face = face;
+    m_keyboard = keyboard;
     // Vita3K's own bindings for a Vita button [gamepad] leaves out (input.cpp)
     static const std::pair<ButtonSymbol, std::pair<const char *, const char *>> buttons[] = {
         { ButtonSymbol::Square, { "square", "west" } }, { ButtonSymbol::Circle, { "circle", "east" } },
@@ -286,22 +398,45 @@ bool ButtonLabels::configure(const std::string &style, const std::map<std::strin
         { ButtonSymbol::Start, { "start", "start" } }, { ButtonSymbol::Select, { "select", "back" } }
     };
     m_labels.clear();
+    std::string keys; // for the log
     for (const auto &[symbol, names] : buttons) {
+        if (style == "keyboard") {
+            // the first key [keyboard] binds to it (its default when the file has no line for it; none
+            // when the line is empty: the PlayStation symbol stays)
+            const auto binding = std::find_if(button_bindings().begin(), button_bindings().end(),
+                [&](const ButtonBinding &b) { return names.first == std::string(b.name); });
+            const std::string fallback = binding != button_bindings().end() ? binding->keys : "";
+            const auto it = keyboard.find(names.first);
+            std::vector<std::string> warnings;
+            auto codes = parse_keys(it != keyboard.end() ? it->second : fallback, names.first, warnings);
+            if (codes.empty() && it != keyboard.end() && !split_bindings(it->second).empty())
+                codes = parse_keys(fallback, names.first, warnings);
+            if (codes.empty())
+                continue;
+            Label label{ key_cap_text(codes[0]), 240, 240, 240 };
+            label.keycap = true;
+            keys += (keys.empty() ? "" : " ") + key_name(codes[0]);
+            m_labels[symbol] = label;
+            continue;
+        }
+        // the gamepad button [gamepad] binds to it (its default when the file has no line for it; none
+        // when the line is empty)
         const auto it = gamepad.find(names.first);
-        std::string bound = it != gamepad.end() ? trim(it->second.substr(0, it->second.find(','))) : std::string();
-        if (bound.empty())
-            bound = names.second;
+        std::string bound = it != gamepad.end() ? trim(it->second.substr(0, it->second.find(','))) : std::string(names.second);
         const Label label = label_of(bound, face);
         if (!label.text.empty())
             m_labels[symbol] = label;
     }
-    const bool enabled = style == "xbox";
+    const bool enabled = style == "xbox" || style == "keyboard";
     m_enabled = enabled;
     std::string letters;
     for (const auto &[position, letter] : face)
         letters += letter;
-    LOG_INFO("Button labels: {}{}", enabled ? "Xbox" : "PlayStation",
-        enabled ? fmt::format(" (at {}x{})", scale, letters.empty() ? "" : ", face buttons " + letters) : "");
+    if (style == "keyboard")
+        LOG_INFO("Button labels: keyboard (at {}x, keys {})", scale, keys);
+    else
+        LOG_INFO("Button labels: {}{}", enabled ? "Xbox" : "PlayStation",
+            enabled ? fmt::format(" (at {}x{})", scale, letters.empty() ? "" : ", face buttons " + letters) : "");
     return enabled || was_enabled;
 }
 
@@ -320,7 +455,7 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
         return a.hash == hash && a.format == format && a.width == width && a.height == height;
     });
     std::lock_guard lock(m_mutex);
-    if (atlas == m_atlases.end() || m_style != "xbox") {
+    if (atlas == m_atlases.end() || (m_style != "xbox" && m_style != "keyboard")) {
         if (atlas == m_atlases.end() && m_logged.insert(hash).second)
             LOG_DEBUG("Button labels: {}x{} texture {:016x} has no buttons we know", width, height, hash);
         return false;
@@ -384,7 +519,18 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
                     img.at(x, y)[3] = 0;
             const float ring = std::min(slot.w, slot.h) * 0.96f * s;
             const float cx = (slot.x + slot.w / 2.f) * s, cy = (slot.y + slot.h / 2.f) * s;
-            draw_text(img, cx, cy, ring, 1, std::max(0.07f, 1.4f * s / ring), "o", 255, 255, 255);
+            if (label->second.keycap) {
+                // a keycap with the key's name in it, as wide as the name needs within the cell
+                const float stroke = std::max(1.4f * s, ring * 0.07f);
+                const float box_h = ring - stroke;
+                float text_h = 0, xscale = 1;
+                const float box_w = keycap_width(label->second.text, box_h, slot.w * 0.96f * s - stroke, stroke, text_h, xscale);
+                draw_keycap(img, cx, cy, box_w, box_h, stroke, 255, 255, 255);
+                draw_text(img, cx, cy, text_h, xscale, std::max(0.17f, 1.3f * s / text_h), label->second.text, 255, 255, 255);
+                drawn++;
+                continue;
+            }
+            draw_text(img, cx, cy, ring, 1, std::max(0.07f, 1.4f * s / ring), std::string(1, GLYPH_RING), 255, 255, 255);
             const float letters = ring * 0.48f;
             draw_text(img, cx, cy, letters, label->second.text.size() > 1 ? 0.8f : 1.f, std::max(STROKE, 1.4f * s / letters),
                 label->second.text, 255, 255, 255);
@@ -416,15 +562,41 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
             for (uint32_t x = ex0; x < ex1; x++)
                 for (int c = 0; c < 3; c++)
                     img.at(x, y)[c] = static_cast<uint8_t>(ink[c]);
-        // the letters, as tall as the symbol (START and SELECT: their Xbox symbol, half again as tall
-        // as the word), as narrow as a symbol drawn squeezed
         const ButtonSymbol sym = slot.symbol;
         const bool word = sym == ButtonSymbol::Start || sym == ButtonSymbol::Select;
+        const Label &l = label->second;
+        if (l.keycap) {
+            // a keycap with the key's name in it, in the symbol's place: as tall as the symbol (START and
+            // SELECT: half again as tall as the word, as wide as the name needs within it), a little
+            // taller than wide at most
+            const float cx = (slot.x + slot.w / 2.f) * s, cy = (slot.y + slot.h / 2.f) * s;
+            const float stroke = std::max(0.9f * s, slot.h * s * 0.08f);
+            const float box_h = (word ? slot.h * 1.5f : std::min<float>(slot.h, slot.w * 1.15f)) * s - stroke;
+            float text_h = 0, xscale = 1;
+            const float box_w = keycap_width(l.text, box_h, slot.w * s - stroke, stroke, text_h, xscale);
+            // the ink under a keycap that reaches past the word
+            if (word) {
+                const uint32_t kx0 = static_cast<uint32_t>(std::max(0.f, cx - box_w / 2 - stroke));
+                const uint32_t kx1 = static_cast<uint32_t>(std::min<float>(w, cx + box_w / 2 + stroke));
+                const uint32_t ky0 = static_cast<uint32_t>(std::max(0.f, cy - box_h / 2 - stroke));
+                const uint32_t ky1 = static_cast<uint32_t>(std::min<float>(h, cy + box_h / 2 + stroke));
+                for (uint32_t y = ky0; y < ky1; y++)
+                    for (uint32_t x = kx0; x < kx1; x++)
+                        for (int c = 0; c < 3; c++)
+                            img.at(x, y)[c] = static_cast<uint8_t>(ink[c]);
+            }
+            const uint8_t v = slot.white ? 255 : l.r;
+            draw_keycap(img, cx, cy, box_w, box_h, stroke, v, slot.white ? 255 : l.g, slot.white ? 255 : l.b);
+            draw_text(img, cx, cy, text_h, xscale, std::max(0.17f, 0.9f * s / text_h), l.text, v, slot.white ? 255 : l.g, slot.white ? 255 : l.b);
+            drawn++;
+            continue;
+        }
+        // the letters, as tall as the symbol (START and SELECT: their Xbox symbol, half again as tall
+        // as the word), as narrow as a symbol drawn squeezed
         const float aspect = static_cast<float>(slot.w) / slot.h, natural = natural_aspect(sym);
         const bool face = sym != ButtonSymbol::L && sym != ButtonSymbol::R && !word;
         const float tall = word ? slot.h * 1.5f : (face && aspect >= natural ? std::max(slot.w, slot.h) : slot.h);
         const float xscale = word ? 1.f : std::clamp(aspect / natural, 0.4f, 1.f);
-        const Label &l = label->second;
         if (slot.white)
             draw_text(img, (slot.x + slot.w / 2.f) * s, (slot.y + slot.h / 2.f) * s, tall * s, xscale, STROKE, l.text, 255, 255, 255);
         else

@@ -272,6 +272,13 @@ public class BuildActivity extends Activity {
         // from the "Add an add-on" shortcut, with the game built: the file picker straight away
         if (built && savedInstanceState == null && getIntent().getBooleanExtra(EXTRA_ADD_ADDON, false))
             pick(REQUEST_PICK_ADDON);
+        // Android 13+: the build's progress notification needs the player's permission (optional: the
+        // build runs without it). Asked as the setup screen opens, before anything runs: asked at Build,
+        // the system's question stayed in front of the steps that start the game's activity (installing,
+        // the module dump), and the setup waited until it was answered (both games' Thor runs)
+        if (!built && step == PICK && savedInstanceState == null && Build.VERSION.SDK_INT >= 33
+            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, 0);
         // where a gamepad's first press lands (a focus requested before layout, in touch mode, is lost)
         page.post(() -> (built ? addonButton : parts.length() == 0 ? addButton : buildButton).requestFocus());
     }
@@ -500,8 +507,8 @@ public class BuildActivity extends Activity {
     // --- the steps ----------------------------------------------------------------------------
 
     private void startSetup() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, 0);
+        // (the notification permission was asked when the screen opened: never here, where its dialog would
+        // hold up the steps)
         BuildService.logFile(this).delete();
         synchronized (BuildService.state) {
             BuildService.state.lines.clear();

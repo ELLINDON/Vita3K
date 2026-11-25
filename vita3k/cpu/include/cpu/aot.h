@@ -46,6 +46,9 @@ void aot_set_halt(Address halt);
 Address aot_halt();
 // SSD_AOT_NATIVE=1 with recompiled modules: threads run on NativeCPU, without the JIT
 bool aot_native_cpu();
+// The modules SSD_AOT named that couldn't be loaded, one "path: reason" a line ("" when all loaded).
+// With NativeCPU the game can't run without them: a front end says so instead of hanging.
+std::string aot_load_failures();
 
 // A module (by the name stem of its ELF, e.g. "eboot") runs natively, its code checked against guest
 // memory, and was generated with an override feature of the game project (aot_abi.h

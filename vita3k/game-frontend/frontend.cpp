@@ -36,6 +36,7 @@
 #include <overlay/display_manager.h>
 #include <config/state.h>
 #include <config/version.h>
+#include <cpu/aot.h>
 #include <ctrl/state.h>
 #include <display/state.h>
 #include <emuenv/state.h>
@@ -1189,7 +1190,27 @@ int run(Profile &profile, int argc, char *argv[]) {
     const auto session_start = std::chrono::steady_clock::now();
     bool mipmaps_set = false;
 
+    // A recompiled module that didn't load (built for another version, or needing a library this
+    // platform's app lacks): on NativeCPU the game would stop at its first call into it with nothing on
+    // the screen (utakata 0.2.0 on Android, 2026-11-25). Say so and quit instead.
+    bool load_failure_reported = false;
     hooks.on_tick = [&] {
+        if (!load_failure_reported && aot_native_cpu()) {
+            if (const std::string failures = aot_load_failures(); !failures.empty()) {
+                load_failure_reported = true;
+                fail(fmt::format("The game's native code could not be loaded, so it can't run:\n\n{}\n"
+#ifdef __ANDROID__
+                                 "Build the game again: on a PC with --android, or from this app's setup after "
+                                 "reinstalling the app. See {}/vita3k.log.",
+#else
+                                 "Build the game again: start it with --install. See {}/vita3k.log.",
+#endif
+                                 failures, profile.id));
+                SDL_Event quit{};
+                quit.type = SDL_EVENT_QUIT;
+                SDL_PushEvent(&quit);
+            }
+        }
         bool menu_toggle = false;
         {
             const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);

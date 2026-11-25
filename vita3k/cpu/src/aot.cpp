@@ -44,6 +44,16 @@
 
 namespace {
 
+// modules SSD_AOT named that couldn't be loaded, one "path: reason" a line (aot_load_failures)
+std::mutex load_failures_mutex;
+std::string load_failures;
+
+void note_load_failure(const std::string &path, const std::string &reason) {
+    LOG_ERROR("AOT: cannot load {} ({})", path, reason);
+    const std::lock_guard<std::mutex> lock(load_failures_mutex);
+    load_failures += path + ": " + reason + "\n";
+}
+
 enum class Verified : int {
     unknown,
     yes,
@@ -131,7 +141,7 @@ void load_modules() {
 #ifdef _WIN32
         const HMODULE dll = LoadLibraryA(path.c_str());
         if (!dll) {
-            LOG_ERROR("AOT: cannot load {} (error {})", path, GetLastError());
+            note_load_failure(path, fmt::format("error {}", GetLastError()));
             continue;
         }
         const auto init = reinterpret_cast<armrecomp::AotInitFn>(GetProcAddress(dll, ARMRECOMP_AOT_INIT));
@@ -140,14 +150,15 @@ void load_modules() {
         // never unloaded, like the DLLs; RTLD_LOCAL keeps each module's symbols to itself
         void *const dll = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!dll) {
-            LOG_ERROR("AOT: cannot load {} ({})", path, dlerror());
+            const char *const reason = dlerror();
+            note_load_failure(path, reason ? reason : "dlopen failed");
             continue;
         }
         const auto init = reinterpret_cast<armrecomp::AotInitFn>(dlsym(dll, ARMRECOMP_AOT_INIT));
         const auto features = reinterpret_cast<const char *(*)()>(dlsym(dll, ARMRECOMP_AOT_FEATURES));
 #endif
         if (!init) {
-            LOG_ERROR("AOT: {} has no {}", path, ARMRECOMP_AOT_INIT);
+            note_load_failure(path, fmt::format("no {}", ARMRECOMP_AOT_INIT));
             continue;
         }
         auto m = std::make_unique<LoadedModule>();
@@ -328,6 +339,11 @@ void aot_set_halt(Address halt) {
 
 Address aot_halt() {
     return registry.halt;
+}
+
+std::string aot_load_failures() {
+    const std::lock_guard<std::mutex> lock(load_failures_mutex);
+    return load_failures;
 }
 
 bool aot_native_cpu() {

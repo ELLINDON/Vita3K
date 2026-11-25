@@ -28,6 +28,8 @@
 #include <emuenv/state.h>
 #include <util/log.h>
 
+#include <cstdlib>
+
 // provides WinMain for the windowed executable, which calls main below
 #include <SDL3/SDL_main.h>
 
@@ -71,6 +73,12 @@ int main(int argc, char *argv[]) {
     profile.hooks.configure = [](game_frontend::Context &ctx, Config &cfg) {
         // a PS TV: pads on the external ports, the PS TV model (SceCtrl, SceSysmem)
         cfg.pstv_mode = ctx.settings->values.get_bool("controls.pstv_mode");
+        // RENOVA_MEMORY_MAPPING (debug, Phase 0/4): another memory mapping than the front end's
+        // double-buffer, to study the player character drawn black (community: external-host)
+        if (const char *mapping = std::getenv("RENOVA_MEMORY_MAPPING"); mapping && *mapping) {
+            cfg.memory_mapping = mapping;
+            LOG_INFO("memory mapping (RENOVA_MEMORY_MAPPING): {}", cfg.memory_mapping);
+        }
     };
     return game_frontend::run(profile, argc, argv);
 }

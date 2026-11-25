@@ -780,13 +780,16 @@ int run(Profile &profile, int argc, char *argv[]) {
         for (const auto &item : install_content) {
             const fs::path path = fs_utils::utf8_to_path(item.path);
             LOG_INFO("Installing {}", item.path);
+            // a dump that carries a rePatch mod beside the game's own content: the content first (below),
+            // then the mod (after it), rather than the mod alone
+            const bool content_and_mod = holds_game_content(path);
             // a packaged mod (packaged_mods.h): merged into the archive it changes
             if (const auto mod = install_packaged_mod(emuenv.vita_fs_path, path, title_ids)) {
                 LOG_ERROR_IF(!*mod, "{}: the mod could not be installed", item.path);
                 ok = *mod && ok;
             }
             // a rePatch mod (repatch.h): beside the game, not into it
-            else if (const auto mod = install_repatch(emuenv.vita_fs_path, path, title_ids)) {
+            else if (const auto mod = content_and_mod ? std::nullopt : install_repatch(emuenv.vita_fs_path, path, title_ids)) {
                 LOG_ERROR_IF(!*mod, "{}: the mod could not be installed", item.path);
                 ok = *mod && ok;
             } else if (fs::is_directory(path)) {
@@ -820,6 +823,12 @@ int run(Profile &profile, int argc, char *argv[]) {
                 const auto installed = install_archive(emuenv, path, nullptr, nullptr, dump_license_file(item, temp));
                 fs::remove(temp);
                 ok = !installed.empty() && std::all_of(installed.begin(), installed.end(), [](const ContentInfo &c) { return c.state; }) && ok;
+            }
+            if (content_and_mod) {
+                if (const auto mod = install_repatch(emuenv.vita_fs_path, path, title_ids)) {
+                    LOG_ERROR_IF(!*mod, "{}: its rePatch mod could not be installed", item.path);
+                    ok = *mod && ok;
+                }
             }
         }
         for (const auto &id : remove_mods)
@@ -1263,13 +1272,31 @@ int run(Profile &profile, int argc, char *argv[]) {
         std::vector<std::pair<int, std::string>> records;
         std::vector<std::tuple<std::string, uint32_t, uint32_t>> memdumps;
         std::vector<std::pair<uint32_t, std::vector<uint8_t>>> memwrites;
+        std::vector<std::string> texts;
+        bool text_submit = false;
         {
             const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
             shots.swap(emuenv.ctrl.injected_screenshots);
             records.swap(emuenv.ctrl.injected_records);
             memdumps.swap(emuenv.ctrl.injected_memdumps);
             memwrites.swap(emuenv.ctrl.injected_memwrites);
+            texts.swap(emuenv.ctrl.injected_texts);
+            std::swap(text_submit, emuenv.ctrl.injected_text_submit);
         }
+        // text the test driver types (tools/v3kdrive.py text:), into the game's open keyboard dialog
+        for (const auto &text : texts) {
+            if (!is_any_ime_active(emuenv)) {
+                LOG_WARN("text: no keyboard dialog is open; '{}' dropped", text);
+                continue;
+            }
+            {
+                const std::lock_guard<std::mutex> lock(emuenv.ime.mutex);
+                ime_commit_text(emuenv.ime, string_utils::utf8_to_utf16(text));
+            }
+            LOG_INFO("text: typed '{}'", text);
+        }
+        if (text_submit)
+            LOG_INFO("textsubmit: {}", submit_current_ime(emuenv) ? "Enter pressed" : "no keyboard dialog is open");
         for (const auto &[address, bytes] : memwrites) {
             // guest memory for research (tools/v3kdrive.py memwrite:), when every byte is mapped
             const uint32_t size = static_cast<uint32_t>(bytes.size());

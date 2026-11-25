@@ -1642,6 +1642,19 @@ void VKSurfaceCache::submit_immediate_surface_sync(ColorSurfaceCacheInfo &surfac
     };
     state.request_queue.push(CallbackRequest{ new CallbackRequestFunction(std::move(vk_callback)) });
 
+    // double-buffer: the copy above went to the GPU's buffer; guest RAM gets it here, once the fence
+    // above has passed, as the end of a scene does (VKContext::submit_command_buffer). Without it a
+    // surface rendered once and read after (Phantasy Star Nova's player textures, sampled from guest
+    // RAM as compressed textures) never reaches guest RAM
+    if (returned_info && returned_info->need_buffer_sync && state.mapping_method == MappingMethod::DoubleBuffer) {
+        const vkutil::Buffer *readback = returned_info->readback_buffer.get();
+        const uint32_t size = static_cast<uint32_t>(returned_info->total_bytes);
+        if (readback && readback->mapped_data && readback->size >= size)
+            state.request_queue.push(BufferSyncRequest{ returned_info->data.address(), size, static_cast<const uint8_t *>(readback->mapped_data) });
+        else
+            state.request_queue.push(BufferSyncRequest{ returned_info->data.address(), size });
+    }
+
     if (returned_info)
         state.request_queue.push(PostSurfaceSyncRequest{ returned_info });
 }

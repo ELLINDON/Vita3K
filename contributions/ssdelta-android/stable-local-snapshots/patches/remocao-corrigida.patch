@@ -1,0 +1,31 @@
+--- a/OnScreenControls.java
++++ b/OnScreenControls.java
+@@ -895,6 +895,7 @@
+     private String targetButtonId;
+     private void toast(String message){android.widget.Toast.makeText(getContext(),message,android.widget.Toast.LENGTH_SHORT).show();}
+     private void reloadExtraButtons(){
++        String selectedId=editIndex>=0&&editIndex<editorNames().length?key(editIndex):null;
+         syncTouchButtons(true);
+         for(int i=buttons.size()-1;i>=0;i--)if(buttons.get(i).extra)buttons.remove(i);
+         org.json.JSONArray list=customLayout.optJSONArray("extra_buttons");
+@@ -911,6 +912,11 @@
+             x.element=new ControlElement("custom_"+slot,ControlElement.Type.BUTTON,800,touch?0:mask);
+             x.sourceSlot=inputs.register(x.element);buttons.add(x);
+         }
++        // Rebuilt controls have empty rectangles. Restore saved geometry immediately,
++        // including after deletion (which previously only invalidated the View).
++        applyCustomLayout();
++        editIndex=-1;
++        if(selectedId!=null)for(int i=0;i<editorNames().length;i++)if(selectedId.equals(key(i))){editIndex=i;break;}
+     }
+     private static boolean validDigital(int bit){int allowed=SELECT|START|UP|RIGHT|DOWN|LEFT|L1|R1|TRIANGLE|CIRCLE|CROSS|SQUARE;return bit!=0&&(bit&~allowed)==0;}
+     private void syncTouchButtons(boolean cancel){
+@@ -948,7 +954,7 @@
+     }
+     private void duplicateSelected(){Button b=selectedButton();if(b==null||b==menu||b==latch){toast("Selecione um botao comum ou touch para duplicar");return;}if(extraRecords().length()>=24){toast("Limite de 24 botoes adicionais");return;}addExtra(b.bit,b.label!=null?b.label:editorNames()[editIndex],b.touchButton,b.targetX,b.targetY,editorRect(editIndex),b.customShape==0?(b.round?1:3):b.customShape);Button copy=selectedButton();if(copy!=null&&b.toggle){org.json.JSONArray records=extraRecords();for(int i=0;i<records.length();i++){org.json.JSONObject item=records.optJSONObject(i);if(item!=null&&copy.element.id.equals("custom_"+item.optInt("slot",-1)))try{item.put("toggle",true);}catch(org.json.JSONException e){throw new IllegalStateException(e);}}reloadExtraButtons();applyCustomLayout();}}
+     private void removeSelected(){Button b=selectedButton();if(b==null){if(editIndex>editButtons().size()){setAnalogEnabled(directionAt(editIndex)==1,false);editIndex=-1;invalidate();}else toast("Selecione um botao ou analogico para remover");return;}if(b==menu){toast("O menu permanece disponivel para acessar os ajustes");return;}
+-        new android.app.AlertDialog.Builder(getContext()).setMessage("Remover este botao? Salvar confirma; Cancelar descarta as alteracoes.").setPositiveButton("Remover",(d,w)->{
++        new android.app.AlertDialog.Builder(getContext()).setMessage("Remover "+(b.label!=null?b.label:ButtonAppearance.label(b.bit))+"? Salvar confirma; Cancelar descarta as alteracoes.").setPositiveButton("Remover",(d,w)->{
+             try{if(b.extra){org.json.JSONArray a=extraRecords(),out=new org.json.JSONArray();for(int i=0;i<a.length();i++){org.json.JSONObject v=a.optJSONObject(i);if(v!=null&&!b.element.id.equals("custom_"+v.optInt("slot",-1)))out.put(v);}customLayout.put("extra_buttons",out);customLayout.remove(b.element.id);reloadExtraButtons();}
+             else{org.json.JSONObject h=customLayout.optJSONObject("hidden_buttons");if(h==null){h=new org.json.JSONObject();customLayout.put("hidden_buttons",h);}h.put(b.element.id,true);b.hidden=true;}
+             editIndex=-1;invalidate();}catch(org.json.JSONException e){throw new IllegalStateException(e);}

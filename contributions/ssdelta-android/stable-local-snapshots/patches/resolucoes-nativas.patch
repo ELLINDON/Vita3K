@@ -1,0 +1,153 @@
+--- a/main.cpp
++++ b/main.cpp
+@@ -25,6 +25,9 @@
+ #include "dlc.h"
+ #include "saves.h"
+ #include "frame_pacing.h"
++#include "native_resolution.h"
++#include <cstdlib>
++#include <cstddef>
+ 
+ #include <config/state.h>
+ #include <cpu/aot.h>
+@@ -135,16 +138,16 @@
+     const std::string id = "ss-delta", exe = id + game_frontend::executable_suffix;
+     IniSection display{ "display", "",
+         {
+-            { "full_3d", Kind::Bool, "true", 0, 0, {},
+-                "Draw the 3D at 960x544 like the menus and HUD (the game's own ResoDown 0). Off: 720x408,\n"
+-                "upscaled, as on the Vita." },
++            { "full_3d", Kind::Choice, "true", 0, 0, { "half", "false", "true" },
++                "Resolucao interna do 3D: 0.5x 480x272, 0.75x 720x408 ou 1x 960x544.\n"
++                "HUD e menus mantem 960x544 na escala geral 1x. Reinicie o jogo para aplicar." },
+             layout::scale(),
+             layout::window_scale(),
+             layout::fullscreen(id, exe),
+             layout::vsync(),
+             { "frame_rate", Kind::Choice, "60", 0, 0, { "24", "30", "40", "45", "60" },
+                 "Target frame rate: 24, 30, 40, 45 or 60. Game speed uses measured frame time.\n"
+-                "24/40/45 are experimental: presentation cadence depends on the 60 Hz vblank.\n"
++                "60 is experimental; lower rates were tested by the owner. Cadence depends on device/vblank.\n"
+                 "Loading screens fall back to 30 only with a build lacking the loading-race fix." },
+             { "show_fps", Kind::Bool, "false", 0, 0, {}, "Contador de quadros do jogo no canto superior esquerdo." },
+             layout::filter(),
+@@ -157,10 +160,13 @@
+         if (spec.key == "show_fps") { spec.title = "Mostrar FPS"; spec.live = true; }
+         if (spec.key == "frame_rate") {
+             spec.live = true;
+-            spec.choice_labels = { "24 (experimental)", "30", "40 (experimental)", "45 (experimental)", "60" };
+-        }
+-        if (spec.key == "full_3d")
+-            spec.title = "Full-resolution 3D";
++            spec.choice_labels = { "24", "30", "40", "45", "60 (experimental)" };
++        }
++        if (spec.key == "full_3d") {
++            spec.title = "Resolucao do 3D";
++            spec.choice_labels = { "0.5x (480x272)", "0.75x (720x408)", "1x (960x544)" };
++        }
++        if (spec.key == "scale")spec.title="Escala geral";
+     }
+     IniSection game{ "game", "",
+         { { "dlc", Kind::Bool, "true", 0, 0, {},
+@@ -337,29 +343,15 @@
+     emuenv.io.read_overrides[read_override_key(installed)] = copy;
+ }
+ 
+-// With the 3D at 960x544 (full_3d), the game samples its depth buffer through vertex shaders that
+-// scale the coordinates by 720/736 and 408/416: right for the 720x408 mode, whose depth texture is
+-// padded to whole 32-pixel tiles (1472x832 samples), 2% short at 960x544, which needs no padding.
+-// Depth of field and haze then use the depth beside each pixel (bones in the hub blurred). Both
+-// values are in the shaders' literal table, a list of {u32 register, f32 value}, as consecutive
+-// entries; they are set to 1.0 there.
+-void unscale_depth_uvs(SceGxmProgram &program) {
+-    constexpr uint32_t x_scale = 0x3f7a6f4e; // 720 / 736
+-    constexpr uint32_t y_scale = 0x3f7b13b2; // 408 / 416
+-    constexpr uint32_t one = 0x3f800000;
+-    uint8_t *const bytes = reinterpret_cast<uint8_t *>(&program);
+-    int replaced = 0;
+-    for (uint32_t i = 0; i + 12 <= program.size; i += 4) {
+-        uint32_t x, y;
+-        std::memcpy(&x, bytes + i, 4);
+-        std::memcpy(&y, bytes + i + 8, 4);
+-        if (x == x_scale && y == y_scale) {
+-            std::memcpy(bytes + i, &one, 4);
+-            std::memcpy(bytes + i + 8, &one, 4);
+-            replaced++;
+-        }
+-    }
+-    LOG_INFO_IF(replaced, "full_3d: depth UV scale set to 1.0 in a {} shader", program.is_vertex() ? "vertex" : "fragment");
++// The game allocates its native 3D targets for ResoDown 0/1/2/3. Depth literals
++// originally describe mode 1; rewrite only recognized adjacent entries of the literal table.
++void scale_depth_uvs(SceGxmProgram &program, ss_delta::native_resolution::Mode mode) {
++    const size_t field=offsetof(SceGxmProgram,literals_offset);
++    if(program.size<field+sizeof(program.literals_offset))return;
++    const size_t table=field+static_cast<size_t>(program.literals_offset);
++    const size_t replaced=ss_delta::native_resolution::patch_literals(
++        reinterpret_cast<uint8_t*>(&program),program.size,table,program.literals_count,mode);
++    LOG_INFO_IF(replaced,"3D resolution: depth UVs set to {}/{} in a {} shader",mode.uv_x(),mode.uv_y(),program.is_vertex()?"vertex":"fragment");
+ }
+ 
+ // The frame rate (docs/03-plan.md, 60 fps): the game paces its main loop with a frame timer
+@@ -1024,13 +1016,22 @@
+                 LOG_WARN("Add-ons: not unlocked, the installed game lacks them ({})", why);
+         }
+         // the game's own engine settings that ss-delta.ini changes
+-        const bool full_3d = values.get_bool("display.full_3d");
+-        std::map<std::string, std::string> boot_config{ { "ResoDown", full_3d ? "0" : "1" } };
++        const int requested_mode=ss_delta::native_resolution::setting_mode(values.get("display.full_3d"));
++        std::map<std::string, std::string> boot_config{ { "ResoDown", std::to_string(requested_mode) } };
+         for (const auto &[key, value] : values.section("boot_config"))
+             boot_config[key] = value;
+         override_boot_config(emuenv, profile.title_id, ctx.data_dir / "game", boot_config);
+-        if (full_3d)
+-            emuenv.gxm.on_program_registered = unscale_depth_uvs;
++        // Respect an explicit boot_config override and derive UV padding from the effective mode.
++        char *end=nullptr;const std::string &configured=boot_config.at("ResoDown");
++        const long number=std::strtol(configured.c_str(),&end,10);
++        if(end!=configured.c_str()&&*end=='\0'&&number>=0&&number<=2147483647L){
++            const auto mode=ss_delta::native_resolution::mode_for(static_cast<int>(number));
++            emuenv.gxm.on_program_registered=[mode](SceGxmProgram &program){scale_depth_uvs(program,mode);};
++            LOG_INFO("3D resolution: mode {} -> {}x{}; depth padded {}x{}; UV {}/{}; HUD 960x544; global scale {}",number,mode.width,mode.height,mode.padded_width(),mode.padded_height(),mode.uv_x(),mode.uv_y(),settings.scale);
++        } else {
++            emuenv.gxm.on_program_registered=nullptr;
++            LOG_WARN("3D resolution: unrecognized ResoDown {}; depth literals left unchanged",configured);
++        }
+     };
+     hooks.on_tick = [&](game_frontend::Context &ctx) {
+         const int fps = ctx.settings->values.get_int("display.frame_rate");
+--- /dev/null
++++ b/native_resolution.h
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <cstdint>
++#include <cstddef>
++#include <cstring>
++#include <string_view>
++namespace ss_delta::native_resolution {
++struct Mode {
++    uint32_t width,height;
++    constexpr uint32_t padded_width()const{return (width+31u)&~31u;}
++    constexpr uint32_t padded_height()const{return (height+31u)&~31u;}
++    constexpr float uv_x()const{return float(width)/padded_width();}
++    constexpr float uv_y()const{return float(height)/padded_height();}
++};
++constexpr Mode mode_for(int mode){return mode==1?Mode{720,408}:mode==2?Mode{640,368}:mode==3?Mode{480,272}:Mode{960,544};}
++// Keep legacy true/false values as valid choices, so existing settings keep their old resolution.
++constexpr int setting_mode(std::string_view value){return value=="half"?3:value=="false"?1:0;}
++inline size_t patch_literals(uint8_t*bytes,size_t size,size_t table,size_t count,Mode mode){
++    if(!bytes||table>size||count>(size-table)/8||count<2)return 0;
++    // Preserve original retail literals exactly (the stored Y ratio differs by one ULP).
++    if(mode.width==720&&mode.height==408)return 0;
++    constexpr uint32_t original_x=0x3f7a6f4e,original_y=0x3f7b13b2;
++    float xf=mode.uv_x(),yf=mode.uv_y();uint32_t xb,yb;std::memcpy(&xb,&xf,4);std::memcpy(&yb,&yf,4);
++    if(xb==original_x&&yb==original_y)return 0;
++    size_t changed=0;
++    for(size_t i=0;i+1<count;i++){
++        const size_t x=table+i*8+4,y=x+8;uint32_t before_x,before_y;
++        std::memcpy(&before_x,bytes+x,4);std::memcpy(&before_y,bytes+y,4);
++        if(before_x==original_x&&before_y==original_y){std::memcpy(bytes+x,&xb,4);std::memcpy(bytes+y,&yb,4);changed++;}
++    }
++    return changed;
++}
++}

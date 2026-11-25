@@ -1,0 +1,123 @@
+--- a/OnScreenControls.java
++++ b/OnScreenControls.java
+@@ -89,6 +89,7 @@
+         boolean extra,hidden,touchButton,touchHeld,touchSent,toggle,toggled;
+         float targetX=.5f,targetY=.5f;
+         int syntheticId;
++        float labelWidth=-1,labelHeight=-1,labelSize;
+         ControlElement element;
+         int sourceSlot = -1;
+         final RectF rect = new RectF();
+@@ -106,10 +107,20 @@
+ 
+     private final class Stick {
+  org.json.JSONObject config=new org.json.JSONObject(); final FloatingAnalog floating=new FloatingAnalog();
+- boolean available(){return config.optBoolean("enabled",true);}
+- int mode(){return config.optInt("mode",0);}float option(String k,float fallback){return (float)config.optDouble(k,fallback);}
+- boolean region(float x,float y){return AnalogActivation.contains(x,y,homeX,homeY,radius,option("margin",24),getResources().getDisplayMetrics().density,option("activationScale",1.5f));}
+- boolean tick(){if(pointer<0||mode()==0)return false;boolean pending=floating.tick(SystemClock.uptimeMillis(),option("smoothing",0));x=floating.x;y=floating.y;centerX=floating.baseX;centerY=floating.baseY;return pending;}
++ int modeValue,curveValue,restrictionValue;
++ boolean availableValue=true,followValue,invertXValue,invertYValue,idleValue,baseValue=true,knobValue=true;
++ float marginValue=24,activationValue=1.5f,radiusValue=60,sxValue=1,syValue=1,deadValue=.08f,maximumValue=1,smoothingValue;
++ boolean available(){return availableValue;}
++ int mode(){return modeValue;}float option(String k,float fallback){return (float)config.optDouble(k,fallback);}
++ void refresh(){
++  modeValue=config.optInt("mode",0);availableValue=config.optBoolean("enabled",true);
++  marginValue=option("margin",24);activationValue=option("activationScale",1.5f);radiusValue=Math.max(20,Math.min(160,option("radius",60)));
++  sxValue=option("sx",1);syValue=option("sy",1);deadValue=option("dead",.08f);maximumValue=option("maximum",1);smoothingValue=option("smoothing",0);
++  curveValue=config.optInt("curve",0);restrictionValue=config.optInt("restrict",0);followValue=config.optBoolean("follow",false);invertXValue=config.optBoolean("invertX",false);invertYValue=config.optBoolean("invertY",false);
++  idleValue=config.optBoolean("idle",false);baseValue=config.optBoolean("base",true);knobValue=config.optBoolean("knob",true);
++ }
++ boolean region(float x,float y){return AnalogActivation.contains(x,y,homeX,homeY,radius,marginValue,getResources().getDisplayMetrics().density,activationValue);}
++ boolean tick(){if(pointer<0||mode()==0)return false;boolean pending=floating.tick(SystemClock.uptimeMillis(),smoothingValue);x=floating.x;y=floating.y;centerX=floating.baseX;centerY=floating.baseY;return pending;}
+ 
+         private final AnalogControl analog = new AnalogControl();
+         float homeX, homeY, radius; // where it rests, the base's radius
+@@ -126,7 +137,7 @@
+         }
+ 
+         void move(float px, float py) {
+-            if(mode()!=0){floating.move(px,py,Math.max(20,Math.min(160,option("radius",60)))*getResources().getDisplayMetrics().density,mode()==2&&config.optBoolean("follow",false),option("sx",1),option("sy",1),option("dead",.08f),option("maximum",1),config.optInt("curve",0),config.optInt("restrict",0),config.optBoolean("invertX",false),config.optBoolean("invertY",false));tick();scheduleAnalog();return;}
++            if(mode()!=0){floating.move(px,py,radiusValue*getResources().getDisplayMetrics().density,mode()==2&&followValue,sxValue,syValue,deadValue,maximumValue,curveValue,restrictionValue,invertXValue,invertYValue);if(tick())scheduleAnalog();return;}
+  analog.move(px-centerX,py-centerY,radius);
+             x=analog.x; y=analog.y;
+         }
+@@ -143,6 +154,8 @@
+     private Button latch; // the game's latch button, or null
+     private boolean latched; // its Vita button is held
+     private final RectF dpad = new RectF();
++    private final RectF dpadOuter=new RectF(),dpadHub=new RectF();
++    private static final int[] DPAD_BITS={UP,RIGHT,DOWN,LEFT};
+     private int dpadBits;
+     private final Stick leftStick = new Stick(), rightStick = new Stick();
+     private final InputStateAggregator inputs = new InputStateAggregator(64);
+@@ -166,7 +179,7 @@
+     private final long[] pressedAt = new long[16]; // when each button bit last went down
+     private final Runnable resend = this::send;
+  private boolean analogScheduled;
+- private final Runnable analogFrame = () -> {analogScheduled=false;boolean pending=leftStick.tick() | rightStick.tick();send();invalidate();if(pending)scheduleAnalog();};
++ private final Runnable analogFrame = () -> {analogScheduled=false;float lx=leftStick.x,ly=leftStick.y,rx=rightStick.x,ry=rightStick.y;boolean pending=leftStick.tick() | rightStick.tick();if(lx!=leftStick.x||ly!=leftStick.y||rx!=rightStick.x||ry!=rightStick.y){send();invalidate();}if(pending)scheduleAnalog();};
+  private void scheduleAnalog(){if(!analogScheduled&&!editingLayout){analogScheduled=true;postOnAnimation(analogFrame);}}
+ 
+     private float sentLx, sentLy, sentRx, sentRy;
+@@ -727,8 +740,13 @@
+             break;
+         default:
+             text.setColor(stroke.getColor());
+-            text.setTextSize(b.label.length() > 1 ? b.rect.height() * 0.42f : b.rect.height() * 0.55f);
+-            float availableWidth=b.rect.width()*.78f,measured=text.measureText(b.label);if(measured>availableWidth&&measured>0)text.setTextSize(text.getTextSize()*availableWidth/measured);
++            if(b.labelWidth!=b.rect.width()||b.labelHeight!=b.rect.height()){
++                text.setTextSize(b.label.length()>1?b.rect.height()*.42f:b.rect.height()*.55f);
++                float availableWidth=b.rect.width()*.78f,measured=text.measureText(b.label);
++                b.labelSize=measured>availableWidth&&measured>0?text.getTextSize()*availableWidth/measured:text.getTextSize();
++                b.labelWidth=b.rect.width();b.labelHeight=b.rect.height();
++            }
++            text.setTextSize(b.labelSize);
+             canvas.drawText(b.label, cx, cy - (text.descent() + text.ascent()) / 2, text);
+             break;
+         }
+@@ -738,8 +756,8 @@
+         float previousStrokeWidth=stroke.getStrokeWidth();
+         int previousStrokeColor=stroke.getColor();
+         float cx=dpad.centerX(),cy=dpad.centerY(),radius=Math.min(dpad.width(),dpad.height())*.5f,inner=radius*.28f;
+-        int[] bits={UP,RIGHT,DOWN,LEFT};
+-        RectF outer=new RectF(cx-radius,cy-radius,cx+radius,cy+radius),hub=new RectF(cx-inner,cy-inner,cx+inner,cy+inner);
++        int[] bits=DPAD_BITS;
++        RectF outer=dpadOuter,hub=dpadHub;outer.set(cx-radius,cy-radius,cx+radius,cy+radius);hub.set(cx-inner,cy-inner,cx+inner,cy+inner);
+         setFill(false);canvas.drawCircle(cx,cy,radius,fill);
+         for(int i=0;i<4;i++)if((dpadBits&bits[i])!=0){float angle=225+i*90;path.reset();path.arcTo(outer,angle,90);double a=Math.toRadians(angle+90);path.lineTo(cx+inner*(float)Math.cos(a),cy+inner*(float)Math.sin(a));path.arcTo(hub,angle+90,-90);path.close();fill.setColor(0x99ffffff);canvas.drawPath(path,fill);}
+         stroke.setColor(0xccffffff);stroke.setStrokeWidth(2 * u);canvas.drawCircle(cx,cy,radius,stroke);canvas.drawCircle(cx,cy,inner,stroke);
+@@ -750,20 +768,20 @@
+     }
+     private void drawActivationArea(Canvas canvas,Stick stick){
+  if(!stick.available()||stick.mode()!=2)return;
+- float reach=AnalogActivation.reach(stick.radius,stick.option("margin",24),getResources().getDisplayMetrics().density,stick.option("activationScale",1.5f));
++ float reach=AnalogActivation.reach(stick.radius,stick.marginValue,getResources().getDisplayMetrics().density,stick.activationValue);
+  editPaint.setStyle(Paint.Style.FILL);editPaint.setColor(0x2238c7ee);canvas.drawCircle(stick.homeX,stick.homeY,reach,editPaint);
+  editPaint.setStyle(Paint.Style.STROKE);editPaint.setStrokeWidth(2*unit);editPaint.setColor(0xff38c7ee);editPaint.setPathEffect(new android.graphics.DashPathEffect(new float[]{8*unit,6*unit},0));canvas.drawCircle(stick.homeX,stick.homeY,reach,editPaint);editPaint.setPathEffect(null);
+  }
+  private void drawStick(Canvas canvas, Stick stick, float u) {
+         if(!stick.available())return;
+- if(!editingLayout&&stick.mode()==2&&stick.pointer<0&&!stick.config.optBoolean("idle",false))return;
++ if(!editingLayout&&stick.mode()==2&&stick.pointer<0&&!stick.idleValue)return;
+         boolean held = stick.pointer >= 0;
+         float bx = held ? stick.centerX : stick.homeX, by = held ? stick.centerY : stick.homeY;
+         setFill(false);
+-        if(editingLayout||stick.config.optBoolean("base",true)){canvas.drawCircle(bx, by, stick.radius, fill);canvas.drawCircle(bx, by, stick.radius, stroke);}
++        if(editingLayout||stick.baseValue){canvas.drawCircle(bx, by, stick.radius, fill);canvas.drawCircle(bx, by, stick.radius, stroke);}
+         float kx = bx + stick.x * stick.radius, ky = by + stick.y * stick.radius;
+         setFill(held);
+-        if(editingLayout||stick.config.optBoolean("knob",true)){canvas.drawCircle(kx, ky, stick.radius * 0.45f, fill);canvas.drawCircle(kx, ky, stick.radius * 0.45f, stroke);}
++        if(editingLayout||stick.knobValue){canvas.drawCircle(kx, ky, stick.radius * 0.45f, fill);canvas.drawCircle(kx, ky, stick.radius * 0.45f, stroke);}
+     }
+ 
+     private org.json.JSONObject customLayout = new org.json.JSONObject();
+@@ -862,7 +880,7 @@
+     @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(!focus)releaseControls();if(focus&&!editingLayout){reloadCustomLayout();layoutControls();invalidate();}}
+ 
+ 
+-    private void loadAnalogSettings(){org.json.JSONObject a=customLayout.optJSONObject("analog_settings");leftStick.config=a==null?null:a.optJSONObject("left");rightStick.config=a==null?null:a.optJSONObject("right");if(leftStick.config==null)leftStick.config=new org.json.JSONObject();if(rightStick.config==null)rightStick.config=new org.json.JSONObject();migrateAnalogVisibility(leftStick.config);migrateAnalogVisibility(rightStick.config);}
++    private void loadAnalogSettings(){org.json.JSONObject a=customLayout.optJSONObject("analog_settings");leftStick.config=a==null?null:a.optJSONObject("left");rightStick.config=a==null?null:a.optJSONObject("right");if(leftStick.config==null)leftStick.config=new org.json.JSONObject();if(rightStick.config==null)rightStick.config=new org.json.JSONObject();migrateAnalogVisibility(leftStick.config);migrateAnalogVisibility(rightStick.config);leftStick.refresh();rightStick.refresh();}
+  private void migrateAnalogVisibility(org.json.JSONObject config){if(config.optInt("visibilityVersion",0)<1)try{config.put("idle",false);config.put("visibilityVersion",1);}catch(org.json.JSONException e){throw new IllegalStateException(e);}}
+  private void configureAnalog(boolean left){AnalogOptions.show(getContext(),left,(left?leftStick:rightStick).config,updated->{try{org.json.JSONObject all=customLayout.optJSONObject("analog_settings");if(all==null){all=new org.json.JSONObject();customLayout.put("analog_settings",all);}all.put(left?"left":"right",updated);loadAnalogSettings();invalidate();}catch(org.json.JSONException e){throw new IllegalStateException(e);}});}
+  

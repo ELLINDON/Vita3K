@@ -1,0 +1,114 @@
+--- a/frontend.cpp
++++ b/frontend.cpp
+@@ -29,6 +29,7 @@
+ #include "repatch.h"
+ #include "settings.h"
+ #include "settings_menu.h"
++#include "driver_startup_guard.h"
+ 
+ #include <app/functions.h>
+ #include <app/session_controller.h>
+@@ -699,8 +700,33 @@
+     cfg.disable_surface_sync = settings.surface_sync == 3;
+     cfg.memory_mapping = "double-buffer";
+ #ifdef __ANDROID__
+-    // a Turnip build or another libadrenotools package in the app's files/driver/ (ss-delta 09-android)
+-    cfg.custom_driver_name = android_gpu_driver(settings.gpu_driver);
++    // This marker survives a driver/native crash. Do not classify it as a proven driver fault:
++    // the app may also have been killed before the startup health check completed.
++    DriverStartupGuard driver_startup((ctx.data_dir / "driver-startup.pending").string());
++    const auto driver_started_at=std::chrono::steady_clock::now();
++    const auto use_system_driver=[&](const char *reason){
++        const std::string previous=settings.gpu_driver;
++        settings.gpu_driver="system";
++        settings.values.values["debug.gpu_driver"]="system";
++        std::string error;
++        const bool saved=save_setting(settings_file(ctx.exe_dir,profile.id,ctx.player),"debug","gpu_driver","system",error);
++        LOG_WARN("Driver recovery: {}; requested {} -> system; saved {}",reason,previous,saved);
++        if(!saved)LOG_WARN("Driver recovery: cannot save system selection: {}",error);
++        return saved;
++    };
++    if(dump_elfs_seconds<=0 && driver_startup.pending()){
++        if(use_system_driver("previous custom-driver startup was not confirmed")){
++            if(!driver_startup.clear())LOG_WARN("Driver recovery: pending marker could not be removed; system will be used again next start");
++        }
++    }
++    // a Turnip build or another libadrenotools package in the app's files/driver/
++    cfg.custom_driver_name=android_gpu_driver(settings.gpu_driver);
++    if(dump_elfs_seconds<=0 && !cfg.custom_driver_name.empty()){
++        if(!driver_startup.arm(cfg.custom_driver_name)){
++            cfg.custom_driver_name.clear();
++            use_system_driver("cannot persist custom-driver startup marker; custom load skipped");
++        }else LOG_INFO("Driver recovery: startup marker armed for {}",cfg.custom_driver_name);
++    }
+     LOG_INFO("Vulkan driver: {} ([debug] gpu_driver = {})", cfg.custom_driver_name.empty() ? "the system's" : cfg.custom_driver_name, settings.gpu_driver);
+ #endif
+     // a pipeline seen for the first time is compiled in the background (its draws are skipped
+@@ -1161,6 +1187,14 @@
+     bool mipmaps_set = false;
+ 
+     hooks.on_tick = [&] {
++#ifdef __ANDROID__
++        if(driver_startup.armed()){
++            const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-driver_started_at).count();
++            const auto result=driver_startup.observe(emuenv.display.last_setframe_vblank_count.load(std::memory_order_acquire),elapsed);
++            if(result==DriverStartupGuard::Health::Confirmed)LOG_INFO("Driver recovery: custom-driver startup confirmed after game frames and 5 seconds");
++            else if(result==DriverStartupGuard::Health::ClearFailed)LOG_WARN("Driver recovery: startup ran, but marker removal failed; next start will use system for safety");
++        }
++#endif
+         bool menu_toggle = false;
+         {
+             const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
+@@ -1326,6 +1360,11 @@
+     app::AppSessionController session(emuenv);
+     session_ptr = &session;
+     const int exit_code = sdl_frontend::run(emuenv, session, AppLaunchRequest{ .app_path = profile.title_id }, hooks);
++#ifdef __ANDROID__
++    if(exit_code==0 && driver_startup.armed()){
++        if(!driver_startup.clear())LOG_WARN("Driver recovery: clean-exit marker removal failed");
++    }
++#endif
+ 
+ #ifdef _WIN32
+     CoUninitialize();
+--- /dev/null
++++ b/driver_startup_guard.h
+@@ -0,0 +1,38 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <cerrno>
++#include <cstdio>
++#include <cstdint>
++#include <fstream>
++#include <string>
++#include <utility>
++
++// A conservative startup guard, not a crash-cause detector. No background polling or thread.
++class DriverStartupGuard {
++    std::string path_;
++    bool armed_=false,seen_frame_=false;
++    uint64_t first_frame_=0;
++    double first_seen_at_=0;
++public:
++    enum class Health { Waiting,Confirmed,ClearFailed };
++    explicit DriverStartupGuard(std::string path):path_(std::move(path)){}
++    bool pending()const{std::ifstream file(path_,std::ios::binary);return file.is_open();}
++    bool armed()const{return armed_;}
++    bool arm(const std::string&driver){
++        std::ofstream file(path_,std::ios::binary|std::ios::trunc);
++        if(!file)return false;
++        file<<driver<<'\n';file.flush();const bool written=bool(file);file.close();
++        armed_=written&&!file.fail();seen_frame_=false;
++        return armed_;
++    }
++    bool clear(){
++        const bool ok=std::remove(path_.c_str())==0||errno==ENOENT;
++        armed_=false;return ok;
++    }
++    Health observe(uint64_t last_frame_vblank,double elapsed){
++        if(!armed_)return Health::Waiting;
++        if(!seen_frame_){if(last_frame_vblank>0){seen_frame_=true;first_frame_=last_frame_vblank;first_seen_at_=elapsed;}return Health::Waiting;}
++        if(elapsed-first_seen_at_<5 || last_frame_vblank<=first_frame_)return Health::Waiting;
++        return clear()?Health::Confirmed:Health::ClearFailed;
++    }
++};

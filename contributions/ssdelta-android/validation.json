@@ -1,0 +1,12 @@
+{
+  "apk": "ss-delta-progresso-integrado-130-teste.apk",
+  "bytes": 100042598,
+  "sha256": "f2aeaf29bb735daa59a308e94b37fe41d61696ee4325fe62da10a22e34e8e29d",
+  "native_libraries_unchanged": 12,
+  "landscape_preserved": true,
+  "supported_game": "1.30 only (existing eboot hash validation retained)",
+  "game_firmware_modules_embedded": 0,
+  "change": "native extraction activity translucent/invisible; actual setup screen displays progress; native module dump still visible for on-device compilation",
+  "tests": "Java/DEX/APK assembly, six log-progress checks, original native entry/lifecycle integration, game-hash policy, signature and alignment",
+  "device_validation": "ELLINDON reported successful installation and approved the latest integrated-progress build. This is user feedback, not exhaustive device/JIT/lifecycle validation."
+}

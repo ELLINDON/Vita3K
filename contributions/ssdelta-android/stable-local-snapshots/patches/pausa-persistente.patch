@@ -1,0 +1,244 @@
+--- a/vita3k/app/src/app_init.cpp
++++ b/vita3k/app/src/app_init.cpp
+@@ -465,6 +465,8 @@
+ }
+ 
+ void shutdown_app_runtime(EmuEnvState &state) {
++    // Shutdown may wait for guest/GXM work: release session parking before cleanup.
++    state.kernel.session_pause.resume();
+     state.audio.stop_all_ports();
+ 
+     gxm::shutdown(state);
+--- a/vita3k/audio/include/audio/impl/sdl_audio.h
++++ b/vita3k/audio/include/audio/impl/sdl_audio.h
+@@ -20,9 +20,11 @@
+ #include "../state.h"
+ #include <SDL3/SDL_audio.h>
+ #include <condition_variable>
++#include <util/cooperative_pause.h>
+ 
+ class SDLAudioAdapter : public AudioAdapter {
+ private:
++    CooperativePause output_pause;
+     SDL_AudioDeviceID device_id = 0;
+     int device_buffer_samples = 0;
+     SDL_AudioSpec dst_spec;
+--- a/vita3k/audio/src/impl/sdl_audio.cpp
++++ b/vita3k/audio/src/impl/sdl_audio.cpp
+@@ -84,10 +84,14 @@
+ }
+ 
+ void SDLAudioAdapter::switch_state(const bool pause) {
+-    if (pause)
++    if (pause) {
++        output_pause.pause();
+         SDL_CHECK_VOID(SDL_PauseAudioDevice(device_id));
+-    else
++    } else {
++        // Resume playback before admitting producers again.
+         SDL_CHECK_VOID(SDL_ResumeAudioDevice(device_id));
++        output_pause.resume();
++    }
+ }
+ 
+ AudioOutPortPtr SDLAudioAdapter::open_port(int nb_channels, int freq, int nb_sample) {
+@@ -124,7 +128,9 @@
+         if (out_port.stopping)
+             return;
+     }
+-    SDL_CHECK_VOID(SDL_PutAudioStreamData(port.stream.get(), buffer, out_port.len_bytes));
++    output_pause.admit([&]{return out_port.stopping.load(std::memory_order_acquire);},[&]{
++        SDL_CHECK_VOID(SDL_PutAudioStreamData(port.stream.get(), buffer, out_port.len_bytes));
++    });
+ }
+ 
+ void SDLAudioAdapter::set_volume(AudioOutPort &out_port, float volume) {
+@@ -140,6 +146,7 @@
+ }
+ 
+ void SDLAudioAdapter::wake_all_ports() {
++    output_pause.resume(); // stop_all_ports must also release paused audio producers.
+     for (auto &[_, port_ptr] : state.out_ports) {
+         auto &port = static_cast<SDLAudioOutPort &>(*port_ptr);
+         {
+--- a/vita3k/kernel/src/kernel.cpp
++++ b/vita3k/kernel/src/kernel.cpp
+@@ -221,6 +221,8 @@
+ }
+ 
+ void KernelState::process_exit() {
++    // Release parked guests before asking them to exit and joining them.
++    session_pause.resume();
+     {
+         std::lock_guard<std::mutex> lock(mutex);
+         for (auto &[_, thread] : threads)
+@@ -232,21 +234,16 @@
+ }
+ 
+ void KernelState::pause_threads() {
++    // Publish a persistent pause before requesting an executing JIT to return. Native code
++    // observes the same gate at imports; no guest/debugger thread status is overwritten.
++    session_pause.pause();
+     const std::lock_guard<std::mutex> lock(mutex);
+-    for (auto &[_, thread] : threads) {
+-        paused_threads_status[thread->id] = thread->status;
+-        if (thread->status == ThreadStatus::running)
+-            thread->suspend();
+-    }
++    for (auto &[_, thread] : threads)
++        stop(*thread->cpu);
+ }
+ 
+ void KernelState::resume_threads() {
+-    const std::lock_guard<std::mutex> lock(mutex);
+-    for (auto &[_, thread] : threads) {
+-        if (paused_threads_status[thread->id] == ThreadStatus::running)
+-            thread->resume();
+-    }
+-    paused_threads_status.clear();
++    session_pause.resume();
+ }
+ 
+ void KernelState::deinit(MemState &mem) {
+@@ -300,7 +297,7 @@
+ 
+     next_uid = 1;
+ 
+-    paused_threads_status.clear();
++    session_pause.resume();
+ }
+ 
+ SceKernelModuleInfo *KernelState::find_module_by_addr(Address address) {
+--- a/vita3k/kernel/src/thread.cpp
++++ b/vita3k/kernel/src/thread.cpp
+@@ -16,6 +16,7 @@
+ // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ 
+ #include <cpu/functions.h>
++#include <cpu/impl/aot_owner.h>
+ #include <kernel/thread/thread_state.h>
+ 
+ #include <kernel/state.h>
+@@ -65,14 +66,18 @@
+     }
+     // recompiled code calls imports itself (cpu/aot.h)
+     cpu->import_handler = [this](CPUState &cpu_state, uint32_t nid) {
++        const auto exiting = [&]{return cpu_state.aot_unwind.load(std::memory_order_acquire);};
++        if(!kernel.session_pause.wait(exiting))throw AotUnwind{};
+         kernel.call_import(cpu_state, nid, id);
++        if(!kernel.session_pause.wait(exiting))throw AotUnwind{};
+     };
+     // Ad hoc matching over a network instead of a Vita's direct link: games set the retransmit
+     // interval of sceNetAdhocMatchingCreate (argument 8, on the stack at sp + 12) for the Vita's few
+     // ms of latency. Soul Sacrifice Delta: 8 ms, 3 retries, so a joiner gave up after 25 ms, and a
+     // host on Wi-Fi with power saving (laptops, the Steam Deck: 3 to 300 ms) could never be joined.
+     // The interval is raised to at least MIN_ADHOC_REXMT_US.
+-    cpu->lle_call_hook = [this](CPUState &, uint32_t target, uint32_t sp) {
++    cpu->lle_call_hook = [this](CPUState &state, uint32_t target, uint32_t sp) {
++        if(!kernel.session_pause.wait([&]{return state.aot_unwind.load(std::memory_order_acquire);}))throw AotUnwind{};
+         const Address create = kernel.adhoc_matching_create.load(std::memory_order_relaxed);
+         if (!create || (target & ~1u) != (create & ~1u))
+             return;
+@@ -164,6 +169,7 @@
+     exit_requested = true;
+     returned_value = static_cast<uint32_t>(status);
+     cpu->aot_unwind = true;
++    kernel.session_pause.notify();
+ }
+ 
+ void ThreadState::exit_delete(bool exit) {
+@@ -172,6 +178,7 @@
+     run_end_callback = exit;
+     delete_requested = true;
+     cpu->aot_unwind = true;
++    kernel.session_pause.notify();
+ 
+     if (status == ThreadStatus::running) {
+         stop(*cpu);
+@@ -268,13 +275,19 @@
+ 
+             lock.unlock();
+ 
++            // Do not hold the ThreadState mutex while waiting for the session to resume.
++            if(!kernel.session_pause.wait([&]{return cpu->aot_unwind.load(std::memory_order_acquire);})) {
++                lock.lock();
++                continue;
++            }
+             // Single step or run
+             const int res = do_step ? step(*cpu) : run(*cpu);
+ 
+             // handle svc call if this was what stopped the cpu
+             if (cpu->svc_called) {
+                 const uint32_t nid = *Ptr<uint32_t>(read_pc(*cpu) + 4).get(mem);
+-                kernel.call_import(*cpu, nid, id);
++                if(kernel.session_pause.wait([&]{return cpu->aot_unwind.load(std::memory_order_acquire);}))
++                    kernel.call_import(*cpu, nid, id);
+                 clear_exclusive(*cpu);
+             }
+ 
+--- a/vita3k/kernel/include/kernel/state.h
++++ b/vita3k/kernel/include/kernel/state.h
+@@ -30,6 +30,7 @@
+ #include <rtc/rtc.h>
+ #include <util/containers.h>
+ #include <util/types.h>
++#include <util/cooperative_pause.h>
+ 
+ #include <emuenv/app_launch_request.h>
+ 
+@@ -188,7 +189,8 @@
+     bool delete_callback(SceUID id);
+     Ptr<Ptr<void>> get_thread_tls_addr(MemState &mem, SceUID thread_id, int key);
+ 
+-    bool is_threads_paused() { return !paused_threads_status.empty(); }
++    CooperativePause session_pause;
++    bool is_threads_paused() { return session_pause.paused(); }
+     void pause_threads();
+     void resume_threads();
+ 
+@@ -205,5 +207,4 @@
+ 
+ private:
+     std::atomic<SceUID> next_uid{ 1 };
+-    std::map<SceUID, ThreadStatus> paused_threads_status;
+-};
++};
+--- /dev/null
++++ b/vita3k/util/include/util/cooperative_pause.h
+@@ -0,0 +1,36 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <atomic>
++#include <condition_variable>
++#include <mutex>
++#include <utility>
++
++// Session pause is orthogonal to guest/debugger suspension. Wait without unwinding guest frames.
++class CooperativePause {
++    std::atomic<bool> paused_{false};
++    std::mutex mutex_;
++    std::condition_variable changed_;
++public:
++    bool paused() const { return paused_.load(std::memory_order_acquire); }
++    void pause() { std::lock_guard<std::mutex> lock(mutex_); paused_.store(true,std::memory_order_release); }
++    void resume() {
++        { std::lock_guard<std::mutex> lock(mutex_); paused_.store(false,std::memory_order_release); }
++        changed_.notify_all();
++    }
++    // Cancellation changes outside this mutex; synchronizing here prevents a lost wake-up.
++    void notify() { { std::lock_guard<std::mutex> lock(mutex_); } changed_.notify_all(); }
++    template<class Cancel> bool wait(Cancel cancel) {
++        if (!paused()) return !cancel();
++        std::unique_lock<std::mutex> lock(mutex_);
++        changed_.wait(lock,[&]{return !paused() || cancel();});
++        return !cancel();
++    }
++    // Hold admission across an audio upload so pause cannot race a final enqueue.
++    template<class Cancel,class Action> bool admit(Cancel cancel,Action action) {
++        std::unique_lock<std::mutex> lock(mutex_);
++        changed_.wait(lock,[&]{return !paused() || cancel();});
++        if(cancel())return false;
++        action();
++        return true;
++    }
++};

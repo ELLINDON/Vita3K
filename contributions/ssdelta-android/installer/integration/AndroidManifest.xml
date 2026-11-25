@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="35" android:compileSdkVersionCodename="15" package="io.github.vitarecomps.ssdelta.importfix" platformBuildVersionCode="35" platformBuildVersionName="15">
+    <uses-feature android:glEsVersion="0x00030000"/>
+    <uses-feature android:name="android.hardware.vulkan.version" android:required="true" android:version="0x00401000"/>
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+    <uses-feature android:name="android.hardware.gamepad" android:required="false"/>
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <application android:allowBackup="false" android:appCategory="game" android:extractNativeLibs="true" android:hardwareAccelerated="true" android:isGame="true" android:label="SS Delta - Importador teste" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <activity android:exported="true" android:name="io.github.vitarecomps.frontend.SetupActivity" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <activity android:configChanges="locale|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection" android:exported="true" android:launchMode="singleTask" android:name="io.github.vitarecomps.frontend.GameActivity" android:preferMinimalPostProcessing="true" android:resizeableActivity="false" android:screenOrientation="sensorLandscape">
+            <meta-data android:name="game.library" android:value="ss-delta"/>
+        </activity>
+        <activity android:configChanges="locale|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection" android:exported="false" android:launchMode="singleTop" android:name="io.github.vitarecomps.frontend.BuildActivity" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar"/>
+        <service android:exported="false" android:foregroundServiceType="dataSync" android:name="io.github.vitarecomps.frontend.BuildService"/>
+        <activity android:configChanges="locale|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection" android:exported="false" android:name="io.github.vitarecomps.frontend.SaveImportActivity" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar"/>
+        <activity android:configChanges="locale|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection" android:exported="false" android:name="io.github.vitarecomps.frontend.FrontendStepActivity" android:process=":frontend_step" android:resizeableActivity="false" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen">
+            <meta-data android:name="game.library" android:value="ss-delta"/>
+        </activity>
+        <provider android:authorities="io.github.vitarecomps.ssdelta.importfix.importdiag" android:exported="false" android:grantUriPermissions="true" android:name="io.github.vitarecomps.frontend.DiagnosticProvider"/>
+        <activity android:exported="false" android:name="io.github.vitarecomps.frontend.DriverPickerActivity" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"/>
+        <activity android:exported="false" android:name="io.github.vitarecomps.frontend.ControlsEditorActivity" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"/>
+    </application>
+</manifest>

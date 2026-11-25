@@ -348,6 +348,9 @@ static void adhoc_thread(EmuEnvState &emuenv, int thread_id) {
                     peerIt->lastRecv = currentTicks;
                 } else {
                     // Add the peer info to the list if the packet is a valid peer info packet
+                    // ss-delta: at the address its packets come from, which the others reach, not the one it reports (a
+                    // wrong adapter's, or another network's; ss-delta #21)
+                    peerInfo.addr.s_addr = fromAddr.sin_addr.s_addr;
                     peerInfo.lastRecv = currentTicks;
                     emuenv.netctl.adhocPeers.push_back(peerInfo);
                 }

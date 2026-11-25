@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <regex>
+#include <string>
+#include <vector>
 
 namespace net_utils {
 
@@ -62,5 +64,17 @@ void set_local_adhoc(int player); // 0: off, Vita3K's way (a network adapter and
 int local_adhoc_player();
 uint32_t local_adhoc_addr(int player); // network byte order
 bool is_local_adhoc_broadcast(uint32_t addr); // network byte order
+
+// ss-delta: LAN play where broadcasts don't reach the others (Tailscale and other VPNs, routed
+// subnets). In lan mode a broadcast also goes, as a datagram of its own, to each peer: the addresses
+// set here ([multiplayer] peers) and every address an ad hoc packet came from. So it is enough that
+// one side knows the other's address. All addresses in network byte order.
+void set_lan_peers(const std::vector<uint32_t> &addrs);
+void note_lan_peer(uint32_t addr); // a packet came from it
+std::vector<uint32_t> lan_peers(); // the set ones and the learned ones
+bool is_lan_broadcast(uint32_t addr); // lan mode: the adapter's broadcast address or 255.255.255.255
+bool lan_broadcast_useful(); // false for an adapter whose broadcast address is its own (a /32, as Tailscale's)
+// "a.b.c.d" or a host name (IPv4); 0 if it doesn't resolve
+uint32_t resolve_ipv4(const std::string &host);
 
 } // namespace net_utils

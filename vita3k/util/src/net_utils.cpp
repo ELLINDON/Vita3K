@@ -23,13 +23,17 @@
 #ifdef _WIN32
 #include <iphlpapi.h>
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #endif
+
+#include <algorithm>
 
 #include <condition_variable>
 #include <mutex>
@@ -470,6 +474,20 @@ AssignedAddr get_selected_assigned_addr(int32_t &outIndex) {
 
 static int local_adhoc = 0;
 
+// lan mode: this copy's address and broadcast address (init_address), every address of this machine,
+// and the peers a broadcast also goes to
+static std::mutex lan_mutex;
+static uint32_t lan_addr = 0, lan_broadcast = 0;
+static std::vector<uint32_t> own_addrs, set_peers, learned_peers;
+
+static std::string ipv4_text(uint32_t addr) {
+    in_addr a{};
+    a.s_addr = addr;
+    char text[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &a, text, sizeof(text));
+    return text;
+}
+
 void set_local_adhoc(int player) {
     local_adhoc = (player >= 1 && player <= LOCAL_ADHOC_MAX) ? player : 0;
 }
@@ -512,8 +530,90 @@ void init_address(int32_t &outIndex, uint32_t &netAddr, uint32_t &broadcastAddr)
         outIndex, addrs.size(), addr.addr, addr.netMask, addr.name, broadcast_text);
     for (size_t i = 0; i < addrs.size(); i++)
         text += fmt::format("\n  adapter {}: {} mask {} ({})", i, addrs[i].addr, addrs[i].netMask, addrs[i].name);
+    {
+        const std::lock_guard<std::mutex> lock(lan_mutex);
+        lan_addr = netAddr;
+        lan_broadcast = broadcastAddr;
+        own_addrs.clear();
+        for (const auto &a : addrs) {
+            uint32_t own = 0;
+            if (inet_pton(AF_INET, a.addr.c_str(), &own) == 1)
+                own_addrs.push_back(own);
+        }
+    }
+    const auto peers = lan_peers();
+    if (!peers.empty()) {
+        text += "\n  peers ([multiplayer] peers, a broadcast also goes to each):";
+        for (const uint32_t peer : peers)
+            text += " " + ipv4_text(peer);
+    }
+    if (!lan_broadcast_useful())
+        text += "\n  (the adapter's broadcast address is its own: only the peers are reached)";
     if (text != logged)
         LOG_INFO("{}", logged = text);
+}
+
+void set_lan_peers(const std::vector<uint32_t> &addrs) {
+    const std::lock_guard<std::mutex> lock(lan_mutex);
+    set_peers = addrs;
+}
+
+void note_lan_peer(uint32_t addr) {
+    if (local_adhoc || addr == 0 || addr == 0xFFFFFFFFu || (ntohl(addr) >> 24) == 127)
+        return;
+    std::string added;
+    {
+        const std::lock_guard<std::mutex> lock(lan_mutex);
+        if (addr == lan_addr || addr == lan_broadcast || std::find(own_addrs.begin(), own_addrs.end(), addr) != own_addrs.end()
+            || std::find(set_peers.begin(), set_peers.end(), addr) != set_peers.end()
+            || std::find(learned_peers.begin(), learned_peers.end(), addr) != learned_peers.end() || learned_peers.size() >= 16)
+            return;
+        learned_peers.push_back(addr);
+        added = ipv4_text(addr);
+    }
+    LOG_INFO("Ad Hoc Play: a packet from {}, which now also gets this copy's broadcasts", added);
+}
+
+std::vector<uint32_t> lan_peers() {
+    const std::lock_guard<std::mutex> lock(lan_mutex);
+    std::vector<uint32_t> out = set_peers;
+    out.insert(out.end(), learned_peers.begin(), learned_peers.end());
+    return out;
+}
+
+bool is_lan_broadcast(uint32_t addr) {
+    if (local_adhoc)
+        return false;
+    const std::lock_guard<std::mutex> lock(lan_mutex);
+    return addr == 0xFFFFFFFFu || (lan_broadcast != 0 && addr == lan_broadcast);
+}
+
+bool lan_broadcast_useful() {
+    const std::lock_guard<std::mutex> lock(lan_mutex);
+    return lan_broadcast != lan_addr;
+}
+
+uint32_t resolve_ipv4(const std::string &host) {
+    uint32_t addr = 0;
+    if (inet_pton(AF_INET, host.c_str(), &addr) == 1)
+        return addr;
+#ifdef _WIN32
+    // may run before the game's sceNetInit (which starts Winsock)
+    static const bool winsock = [] {
+        WSADATA data;
+        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    }();
+    (void)winsock;
+#endif
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    addrinfo *res = nullptr;
+    if (getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res)
+        return 0;
+    addr = reinterpret_cast<const sockaddr_in *>(res->ai_addr)->sin_addr.s_addr;
+    freeaddrinfo(res);
+    return addr;
 }
 
 } // namespace net_utils

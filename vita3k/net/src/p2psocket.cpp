@@ -126,6 +126,9 @@ int P2PSocket::recv_packet(void *buf, unsigned int len, int flags, SceNetSockadd
     const auto res = PosixSocket::recv_packet(buf, len, flags, from, fromlen);
     if (net_trace_enabled() && res > 0 && from)
         LOG_INFO("P2P recv socket {}: {} bytes from {} (host port)", static_cast<int64_t>(sock), res, addr_str(*from));
+    // ss-delta, lan mode: whoever sent this also gets this copy's broadcasts from now on (net_utils::lan_peers)
+    if (res > 0 && from)
+        net_utils::note_lan_peer(reinterpret_cast<const SceNetSockaddrIn *>(from)->sin_addr.s_addr);
     if ((res > 0) && from)
         *from = convertPosixToP2P(from);
 
@@ -147,6 +150,37 @@ int P2PSocket::send_packet(const void *msg, unsigned int len, int flags, const S
                 res = sent;
         }
         return res;
+    }
+    if (to && net_utils::is_lan_broadcast(to_in.sin_addr.s_addr)) {
+        // ss-delta, lan mode: the broadcast, and a datagram to each peer (Tailscale, routed subnets: no broadcast reaches them)
+        static const bool no_broadcast = [] {
+            const char *env = std::getenv("VITA3K_ADHOC_NO_BROADCAST"); // testing: only the peers
+            return env && env[0] == '1';
+        }();
+        int res = -1;
+        bool sent_any = false;
+        if (!no_broadcast && net_utils::lan_broadcast_useful()) {
+            res = PosixSocket::send_packet(msg, len, flags, &p2p_to, tolen);
+            sent_any = res >= 0;
+            if (net_trace_enabled())
+                LOG_INFO("P2P send socket {}: {} bytes to {} (broadcast): {}", static_cast<int64_t>(sock), len, addr_str(p2p_to),
+                    res >= 0 ? fmt::format("sent {}", res) : log_hex(res));
+        }
+        for (const uint32_t peer : net_utils::lan_peers()) {
+            SceNetSockaddr peer_to = p2p_to;
+            reinterpret_cast<SceNetSockaddrIn &>(peer_to).sin_addr.s_addr = peer;
+            const int sent = PosixSocket::send_packet(msg, len, flags, &peer_to, tolen);
+            if (net_trace_enabled())
+                LOG_INFO("P2P send socket {}: {} bytes to {} (peer): {}", static_cast<int64_t>(sock), len, addr_str(peer_to),
+                    sent >= 0 ? fmt::format("sent {}", sent) : log_hex(sent));
+            if (sent >= 0 && !sent_any) {
+                res = sent;
+                sent_any = true;
+            } else if (!sent_any)
+                res = sent;
+        }
+        // nobody to send to (no peers, no useful broadcast): as if sent
+        return sent_any || res == -1 ? static_cast<int>(len) : res;
     }
     const int res = PosixSocket::send_packet(msg, len, flags, &p2p_to, tolen);
     if (net_trace_enabled())

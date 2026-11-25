@@ -251,6 +251,11 @@ game_frontend::IniLayout ini_layout() {
                 "1's are copied on its first start), and its log and config in ss-delta/player<N>/.\n"
                 "ss-delta-player<N>.ini next to this file overrides settings for player N." },
             adapter_setting(),
+            { "peers", Kind::Text, "", 0, 0, {},
+                "lan: the other players' addresses or host names, separated by commas, for networks that pass\n"
+                "no broadcasts (Tailscale or another VPN, routed subnets). Each broadcast also goes to each of\n"
+                "them, and to every address a packet came from, so one side listing the other is enough (e.g.\n"
+                "the others list the host). Set adapter to the adapter of that network (Tailscale's)." },
             { "gamepad", Kind::Int, "0", 0, 4, {},
                 "0: every gamepad drives the window in focus. 1-4: only that gamepad, also while the window is in\n"
                 "the background (two players at one PC, a gamepad each; set it in ss-delta-player<N>.ini)." },
@@ -966,6 +971,27 @@ int main(int argc, char *argv[]) {
         // adapter (Vita3K's adhoc-addr). Players 2 and up only read the shader cache player 1 keeps.
         net_utils::set_local_adhoc(values.get("multiplayer.network") == "lan" ? 0 : ctx.player);
         cfg.adhoc_addr = values.get_int("multiplayer.adapter");
+        // [multiplayer] peers: a broadcast also goes to each (lan mode; net_utils::set_lan_peers)
+        if (values.get("multiplayer.network") == "lan") {
+            std::vector<uint32_t> peers;
+            std::string list = values.get("multiplayer.peers");
+            std::replace(list.begin(), list.end(), ';', ',');
+            for (size_t start = 0; start <= list.size();) {
+                const size_t end = std::min(list.find(',', start), list.size());
+                std::string host = list.substr(start, end - start);
+                start = end + 1;
+                host.erase(0, host.find_first_not_of(" \t"));
+                host.erase(host.find_last_not_of(" \t") + 1);
+                if (host.empty())
+                    continue;
+                const uint32_t addr = net_utils::resolve_ipv4(host);
+                if (addr)
+                    peers.push_back(addr);
+                else
+                    LOG_ERROR("[multiplayer] peers: {} doesn't resolve to an IPv4 address", host);
+            }
+            net_utils::set_lan_peers(peers);
+        }
         cfg.shader_cache_read_only = ctx.player > 1;
         // the fog colour leaves the vertex shaders as COLOR0/COLOR1 and goes above 1 (blue haze in ST02A
         // without the clamp; grey, as on the Vita, with it)

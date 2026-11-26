@@ -589,9 +589,15 @@ public class BuildActivity extends Activity {
                 save();
                 run();
             } else {
+                // the front end's own words for what failed (a licence for other content, ss-delta #25),
+                // when it left them beside its log
+                String why = stepError();
+                if (!why.isEmpty())
+                    BuildService.append(this, why);
                 synchronized (BuildService.state) {
-                    BuildService.state.error = STEP_NAMES[step] + " failed (the game's log: " + game().optString("id")
-                        + "/vita3k.log in the app's folder).";
+                    String log = "the game's log: " + game().optString("id") + "/vita3k.log in the app's folder";
+                    BuildService.state.error = why.isEmpty() ? STEP_NAMES[step] + " failed (" + log + ")."
+                        : STEP_NAMES[step] + " failed:\n" + why + "\n(More in " + log + ".)";
                 }
                 refresh();
             }
@@ -834,6 +840,19 @@ public class BuildActivity extends Activity {
     private void play() {
         startActivity(new Intent(this, SetupActivity.class));
         finish();
+    }
+
+    /** The front end's step-error.txt (a line per part that failed), or "" when it left none. */
+    private String stepError() {
+        File file = new File(new File(gameDir(this), game().optString("id")), "step-error.txt");
+        if (!file.isFile())
+            return "";
+        try (InputStream in = new FileInputStream(file)) {
+            return new String(readAll(in), StandardCharsets.UTF_8).trim();
+        } catch (Exception e) {
+            Log.w(TAG, "can't read " + file, e);
+            return "";
+        }
     }
 
     private static byte[] readAll(InputStream in) throws java.io.IOException {

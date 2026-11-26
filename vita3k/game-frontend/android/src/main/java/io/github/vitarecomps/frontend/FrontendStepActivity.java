@@ -63,8 +63,16 @@ public class FrontendStepActivity extends GameActivity {
                 String name = displayName(uri);
                 int dot = name.lastIndexOf('.');
                 String extension = dot >= 0 ? name.substring(dot).toLowerCase(java.util.Locale.ROOT) : "";
-                java.io.File link = new java.io.File(getCacheDir(), "picked-" + i + extension);
-                link.delete();
+                // named as the document, so the front end's messages (step-error.txt) name what was
+                // picked; one folder per argument keeps two files of the same name apart
+                String base = (dot >= 0 ? name.substring(0, dot) : name).replaceAll("[^A-Za-z0-9._ ()\\[\\]-]", "_");
+                java.io.File dir = new java.io.File(getCacheDir(), "picked-" + i);
+                dir.mkdirs();
+                java.io.File[] old = dir.listFiles();
+                if (old != null)
+                    for (java.io.File f : old)
+                        f.delete();
+                java.io.File link = new java.io.File(dir, (base.isEmpty() ? "picked" : base) + extension);
                 long size = fd.getStatSize();
                 if (size >= 0 && size <= SMALL_FILE) {
                     // a licence: copied, as the native code reads it with a stream, which can't take

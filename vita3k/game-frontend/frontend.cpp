@@ -289,14 +289,15 @@ std::string license_content_id(const std::string &license) {
 // a game installed before, from the licence already in the Vita file system. A licence file for
 // other content (another game's work.bin picked by mistake, ss-delta #25) would only fail the pkg's
 // decryption with no word of why: it is refused by name, and the installed licence used when there
-// is one.
-std::string pkg_zrif(const fs::path &pkg, const std::string &zrif, const std::string &license, const fs::path &vita_fs) {
+// is one. When none fits, `problem` says why in a line for the player (the setup screens show it).
+std::string pkg_zrif(const fs::path &pkg, const std::string &zrif, const std::string &license, const fs::path &vita_fs, std::string &problem) {
     if (!zrif.empty())
         return zrif;
     if (!license.empty()) {
         fs::ifstream file(fs_utils::utf8_to_path(license), std::ios::binary | std::ios::ate);
         if (!file) {
             LOG_ERROR("Licence {} could not be read", license);
+            problem = "its licence file could not be read.";
             return {};
         }
         const std::string for_id = license_content_id(license);
@@ -309,9 +310,13 @@ std::string pkg_zrif(const fs::path &pkg, const std::string &zrif, const std::st
             return installed;
         }
         LOG_ERROR("{} needs the licence (work.bin or .rif) for {}", pkg, pkg_id);
+        problem = fmt::format("the licence picked is for {}, not for this package. Pick the work.bin or .rif for {}.", for_id, pkg_id);
         return {};
     }
-    return find_pkg_zrif(pkg, vita_fs);
+    std::string installed = find_pkg_zrif(pkg, vita_fs);
+    if (installed.empty())
+        problem = "it needs its licence: pick its work.bin or .rif with it.";
+    return installed;
 }
 
 struct InstallItem {
@@ -808,6 +813,12 @@ int run(Profile &profile, int argc, char *argv[]) {
 
     if (!install_firmware.empty() || !install_content.empty() || !remove_mods.empty()) {
         bool ok = true;
+        // a line per part that failed, for the player: written to <id>/step-error.txt beside the log,
+        // which the setup screens (setup.py, Android's BuildActivity) show instead of an exit code
+        std::vector<std::string> problems;
+        const auto failed = [&](const std::string &item, const std::string &why) {
+            problems.push_back(fmt::format("{}: {}", fs_utils::path_to_utf8(fs_utils::utf8_to_path(item).filename()), why));
+        };
         for (const auto &pup : install_firmware) {
             LOG_INFO("Installing firmware {}", pup);
             fs::create_directories(emuenv.vita_fs_path);
@@ -818,6 +829,13 @@ int run(Profile &profile, int argc, char *argv[]) {
         for (const auto &item : install_content) {
             const fs::path path = fs_utils::utf8_to_path(item.path);
             LOG_INFO("Installing {}", item.path);
+            // a part that fails without a reason of its own gets the log's
+            const bool ok_before = ok;
+            const size_t problems_before = problems.size();
+            const auto note_failure = [&] {
+                if (ok_before && !ok && problems.size() == problems_before)
+                    failed(item.path, "could not be installed; the game's log says why.");
+            };
             // a dump that carries a rePatch mod beside the game's own content: the content first (below),
             // then the mod (after it), rather than the mod alone
             const bool content_and_mod = holds_game_content(path);
@@ -841,9 +859,11 @@ int run(Profile &profile, int argc, char *argv[]) {
                     found - installed, found);
                 ok = installed > 0 && installed == found && ok;
             } else if (string_utils::tolower(path.extension().string()) == ".pkg") {
-                std::string zrif = pkg_zrif(path, item.zrif, item.license, emuenv.vita_fs_path);
+                std::string problem;
+                std::string zrif = pkg_zrif(path, item.zrif, item.license, emuenv.vita_fs_path, problem);
                 if (zrif.empty()) {
                     LOG_ERROR("{}: no licence that fits it (give --license <work.bin> or --zrif after it)", item.path);
+                    failed(item.path, problem.empty() ? "no licence that fits it." : problem);
                     ok = false;
                     continue;
                 }
@@ -868,6 +888,7 @@ int run(Profile &profile, int argc, char *argv[]) {
                     ok = *mod && ok;
                 }
             }
+            note_failure();
         }
         for (const auto &id : remove_mods)
             ok = remove_packaged_mod(emuenv.vita_fs_path, id, title_ids) && ok;
@@ -877,6 +898,16 @@ int run(Profile &profile, int argc, char *argv[]) {
                 if (fs::is_directory(emuenv.vita_fs_path / "ux0" / "rePatch" / id))
                     refresh_packaged_mods(emuenv.vita_fs_path, id);
         LOG_INFO("{} {}", remove_mods.empty() || !install_content.empty() ? "Installation" : "Removal", ok ? "done" : "failed");
+        {
+            const fs::path step_error = ctx.data_dir / "step-error.txt";
+            boost::system::error_code ec;
+            fs::remove(step_error, ec);
+            if (!ok && !problems.empty()) {
+                fs::ofstream file(step_error, std::ios::binary);
+                for (const auto &line : problems)
+                    file << line << '\n';
+            }
+        }
 #ifdef _WIN32
         CoUninitialize();
 #endif

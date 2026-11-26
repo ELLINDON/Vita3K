@@ -405,15 +405,26 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
     out.keyboard = values.section("keyboard");
     out.gamepad = values.section("gamepad");
 
+    // A touch the game binds by default starts from that binding, so a line the file lacks keeps the
+    // default: a file from before [touch] existed gets only the line the Controls page changed (e.g.
+    // black_rite_key), and the touch's spot and other inputs must survive the next start.
     std::map<std::string, TouchBinding> touches;
+    const auto touch_entry = [&](const std::string &name) -> TouchBinding & {
+        auto it = touches.find(name);
+        if (it == touches.end()) {
+            const auto def = std::find_if(default_touches.begin(), default_touches.end(), [&](const TouchBinding &t) { return t.name == name; });
+            it = touches.emplace(name, def != default_touches.end() ? *def : TouchBinding{}).first;
+        }
+        return it->second;
+    };
     const auto &touch_values = values.section("touch");
     for (const auto &[name, value] : touch_values) {
         if (name.ends_with("_key"))
-            touches[name.substr(0, name.size() - 4)].keys = value;
+            touch_entry(name.substr(0, name.size() - 4)).keys = value;
         else if (name.ends_with("_gamepad"))
-            touches[name.substr(0, name.size() - 8)].gamepad = value;
+            touch_entry(name.substr(0, name.size() - 8)).gamepad = value;
         else {
-            auto &touch = touches[name];
+            auto &touch = touch_entry(name);
             char comma = 0;
             std::istringstream in(value);
             if (!(in >> touch.x >> comma >> touch.y) || comma != ',' || touch.x < 0 || touch.x >= 960 || touch.y < 0 || touch.y >= 544) {
@@ -425,7 +436,8 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
     for (auto &[name, touch] : touches) {
         if (touch.x < 0)
             continue;
-        if (!touch_values.contains(name)) {
+        // a default touch (its name already set) has its spot; any other needs its x, y line
+        if (touch.name.empty() && !touch_values.contains(name)) {
             out.warnings.push_back("touch." + name + "_key/_gamepad without touch." + name + " = x, y");
             continue;
         }

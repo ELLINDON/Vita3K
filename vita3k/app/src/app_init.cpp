@@ -113,11 +113,28 @@ static overlay::button_states poll_overlay_input(EmuEnvState &emuenv) {
                 buttons |= binding.button;
         }
 
+        // a front end's second inputs (a second button, a trigger) for Vita buttons, as ctrl.cpp's
+        // apply_controller reads them for the game, so the settings menu and the dialogs follow them too.
+        // A trigger bound that way is only that button here: as L2/R2 it would also turn the menu's page.
+        uint32_t bound_axes = 0;
+        for (const auto &extra : emuenv.ctrl.extra_gamepad_binds) {
+            if (extra.axis >= 0 && extra.axis < 32)
+                bound_axes |= 1u << extra.axis;
+            const bool down = (extra.button >= 0 && SDL_GetGamepadButton(gp, static_cast<SDL_GamepadButton>(extra.button)))
+                || (extra.axis >= 0 && SDL_GetGamepadAxis(gp, static_cast<SDL_GamepadAxis>(extra.axis)) > 0x3FFF);
+            if (down)
+                buttons |= extra.vita_button_ext;
+        }
+        const auto trigger_down = [&](int axis) {
+            return !(axis >= 0 && axis < 32 && (bound_axes & (1u << axis)))
+                && SDL_GetGamepadAxis(gp, static_cast<SDL_GamepadAxis>(axis)) > 0x3FFF;
+        };
+
         const auto &axis_binds = emuenv.cfg.controller_axis_binds;
         if (axis_binds.size() > 5) {
-            if (SDL_GetGamepadAxis(gp, static_cast<SDL_GamepadAxis>(axis_binds[4])) > 0x3FFF)
+            if (trigger_down(axis_binds[4]))
                 buttons |= SCE_CTRL_L2;
-            if (SDL_GetGamepadAxis(gp, static_cast<SDL_GamepadAxis>(axis_binds[5])) > 0x3FFF)
+            if (trigger_down(axis_binds[5]))
                 buttons |= SCE_CTRL_R2;
         }
 

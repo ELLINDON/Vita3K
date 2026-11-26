@@ -49,8 +49,9 @@ constexpr float T = STROKE / 2, B = 1 - STROKE / 2, M = 0.5f; // the strokes' to
 constexpr float BOWL = (M - T) / 2; // the radius of B's, R's and S's bowls
 constexpr float GAP = 0.1f; // between two letters
 
-// the symbols that are no character: Xbox's Menu and View, and the ring around a font page's letters
-constexpr char GLYPH_MENU = '\x01', GLYPH_VIEW = '\x02', GLYPH_RING = '\x03';
+// the symbols that are no character: Xbox's Menu and View, the ring around a font page's letters, and
+// a Switch Pro Controller's + and - (as big as Menu and View; the keycaps' + and - are smaller)
+constexpr char GLYPH_MENU = '\x01', GLYPH_VIEW = '\x02', GLYPH_RING = '\x03', GLYPH_PLUS = '\x04', GLYPH_MINUS = '\x05';
 
 Stroke line(float x0, float y0, float x1, float y1) { return { false, x0, y0, x1, y1, 0 }; }
 Stroke arc(float cx, float cy, float r, float a0, float a1) { return { true, cx, cy, r, a0, a1 }; }
@@ -75,6 +76,10 @@ const Glyph *glyph(char c) {
                                    line(v1, v1, B, v1), line(B, v1, B, B), line(B, B, v1, B), line(v1, B, v1, v1) } };
         // a ring, around a font page's letters
         g[GLYPH_RING] = { 1.f, { arc(M, M, M - T, 0, 360) } };
+        // Nintendo's + (START) and - (SELECT)
+        const float pm = 0.86f; // their width and the +'s height
+        g[GLYPH_PLUS] = { pm, { line(T, M, pm - T, M), line(pm / 2, M - pm / 2 + T, pm / 2, M + pm / 2 - T) } };
+        g[GLYPH_MINUS] = { pm, { line(T, M, pm - T, M) } };
 
         // the rest of the letters, the digits, punctuation and arrows: the keys on a keyboard's keycaps
         // a rounded box w wide (O, 0), its ends half circles
@@ -258,9 +263,21 @@ std::string lower(std::string s) {
     return s;
 }
 
-// the label a gamepad button ([gamepad]'s names, SDL's) shows; empty text: none. face: the face
-// buttons' letters by position where they differ from an Xbox pad's
-ButtonLabels::Label label_of(const std::string &name, const std::map<std::string, std::string> &face) {
+// the face buttons' letters by position on a Nintendo pad (A east, B south, X north, Y west), and on
+// the Android handhelds lettered the same way (Retroid Pocket, AYN, ...)
+const std::map<std::string, std::string> &nintendo_face() {
+    static const std::map<std::string, std::string> face{ { "south", "B" }, { "east", "A" }, { "west", "Y" }, { "north", "X" } };
+    return face;
+}
+
+// the styles that redraw the game's icons (playstation keeps them)
+bool redraws(const std::string &style) {
+    return style == "xbox" || style == "nintendo" || style == "handheld" || style == "keyboard";
+}
+
+// the label a gamepad button ([gamepad]'s names, SDL's) shows in `style` (xbox, nintendo, handheld);
+// empty text: none. face: the face buttons' letters by position where they differ from an Xbox pad's
+ButtonLabels::Label label_of(const std::string &name, const std::map<std::string, std::string> &face, const std::string &style) {
     std::string button = lower(name);
     static const std::map<std::string, std::string> aliases{ { "a", "south" }, { "b", "east" }, { "x", "west" }, { "y", "north" } };
     if (const auto it = aliases.find(button); it != aliases.end())
@@ -269,17 +286,33 @@ ButtonLabels::Label label_of(const std::string &name, const std::map<std::string
     if (const auto it = xbox_face.find(button); it != xbox_face.end()) {
         const auto f = face.find(button);
         const std::string letter = f != face.end() ? f->second : it->second;
+        if (letter != "A" && letter != "B" && letter != "X" && letter != "Y")
+            return {};
+        // Nintendo's and the handhelds' letters are plain: Xbox's colours would put a green A where
+        // an Xbox pad has B
+        if (style != "xbox")
+            return { letter, 240, 240, 240 };
         // in the colours of the letters on an Xbox pad
         static const std::map<std::string, ButtonLabels::Label> colours{
             { "A", { "A", 110, 200, 70 } }, { "B", { "B", 235, 75, 60 } }, { "X", { "X", 70, 150, 240 } }, { "Y", { "Y", 245, 200, 50 } }
         };
-        const auto c = colours.find(letter);
-        return c != colours.end() ? c->second : ButtonLabels::Label{};
+        return colours.at(letter);
     }
-    static const std::map<std::string, std::string> others{
+    // Xbox's, a Switch Pro Controller's (L, R, + and -), or the handhelds' (L1, R1, Xbox's Menu and View)
+    static const std::map<std::string, std::string> xbox_others{
         { "leftshoulder", "LB" }, { "rightshoulder", "RB" }, { "leftstick", "LS" }, { "rightstick", "RS" },
         { "start", std::string(1, GLYPH_MENU) }, { "back", std::string(1, GLYPH_VIEW) }
     };
+    static const std::map<std::string, std::string> nintendo_others{
+        { "leftshoulder", "L" }, { "rightshoulder", "R" }, { "leftstick", "LS" }, { "rightstick", "RS" },
+        { "start", std::string(1, GLYPH_PLUS) }, { "back", std::string(1, GLYPH_MINUS) }
+    };
+    // the handhelds print L1 and R1 on their shoulder buttons (Retroid Pocket, AYN)
+    static const std::map<std::string, std::string> handheld_others{
+        { "leftshoulder", "L1" }, { "rightshoulder", "R1" }, { "leftstick", "LS" }, { "rightstick", "RS" },
+        { "start", std::string(1, GLYPH_MENU) }, { "back", std::string(1, GLYPH_VIEW) }
+    };
+    const auto &others = style == "nintendo" ? nintendo_others : style == "handheld" ? handheld_others : xbox_others;
     if (const auto it = others.find(button); it != others.end())
         return { it->second, 240, 240, 240 };
     return {};
@@ -320,17 +353,33 @@ uint64_t fnv1a64(const uint8_t *data, size_t size) {
 }
 
 SettingSpec button_labels_setting() {
-    SettingSpec s{ "button_labels", SettingSpec::Kind::Choice, "playstation", 0, 0, { "playstation", "xbox", "keyboard", "auto" },
-        "The buttons the game's prompts show: playstation (the game's own icons), xbox (A, B, X, Y, LB,\n"
-        "RB, and Xbox's Menu and View for START and SELECT: the gamepad button that [gamepad] binds to\n"
-        "each Vita button), keyboard (the key [keyboard] binds to each, the first of two, in a keycap:\n"
-        "X, C, Z, V, Q, E, ENT, SHF ...), or auto (the device used last: keyboard after a key or a mouse\n"
-        "button, and for a gamepad xbox while it has lettered buttons, with its own letters, playstation\n"
-        "for a PlayStation pad; before any input, the first gamepad's, or keyboard without one). Also in\n"
-        "the tutorial pictures and the text's few button symbols. The D-pad, the sticks and TOUCH stay." };
+    std::vector<std::string> choices{ "playstation", "xbox", "nintendo" };
+    std::vector<std::string> labels{ "PlayStation", "Xbox", "Nintendo (Switch Pro)" };
+#ifdef __ANDROID__
+    // the Android handhelds' built-in controls (Retroid Pocket, AYN, ...): only offered on Android
+    choices.push_back("handheld");
+    labels.push_back("Android handheld");
+    const char *const handheld = "handheld (an Android handheld's built-in controls, such as a Retroid\n"
+                                 "Pocket's or an AYN's: Nintendo's letters, L1, R1, and Xbox's Menu and View), ";
+#else
+    const char *const handheld = "";
+#endif
+    choices.insert(choices.end(), { "keyboard", "auto" });
+    labels.insert(labels.end(), { "Keyboard", "As the device used" });
+    SettingSpec s{ "button_labels", SettingSpec::Kind::Choice, "playstation", 0, 0, choices,
+        fmt::format("The buttons the game's prompts show: playstation (the game's own icons), xbox (A, B, X, Y, LB,\n"
+                    "RB, and Xbox's Menu and View for START and SELECT: the gamepad button that [gamepad] binds to\n"
+                    "each Vita button), nintendo (a Switch Pro Controller's: A east, B south, X north, Y west, L, R,\n"
+                    "+ and -), {}keyboard (the key [keyboard] binds to each, the first of two, in a keycap:\n"
+                    "X, C, Z, V, Q, E, ENT, SHF ...), or auto (the device used last: keyboard after a key or a mouse\n"
+                    "button, and for a gamepad xbox while it has lettered buttons, with its own letters, nintendo\n"
+                    "for a Nintendo pad, playstation for a PlayStation pad; before any input, the first gamepad's,\n"
+                    "or keyboard without one). Also in the tutorial pictures and the text's few button symbols.\n"
+                    "The D-pad, the sticks and TOUCH stay.",
+            handheld) };
     s.live = true;
     s.title = "Button prompts";
-    s.choice_labels = { "PlayStation", "Xbox", "Keyboard", "As the device used" };
+    s.choice_labels = labels;
     return s;
 }
 
@@ -369,6 +418,9 @@ std::string auto_button_style(const CtrlState &ctrl, std::map<std::string, std::
             break;
         }
     }
+    // a Switch Pro Controller or another pad lettered as Nintendo's: its own style (L, R, + and -)
+    if (face == nintendo_face())
+        return "nintendo";
     return "xbox";
 }
 
@@ -384,7 +436,7 @@ bool ButtonLabels::configure(const std::string &style, const std::map<std::strin
     std::lock_guard lock(m_mutex);
     if (style == m_style && gamepad == m_gamepad && scale == m_scale && face == m_face && keyboard == m_keyboard)
         return false;
-    const bool was_enabled = m_style == "xbox" || m_style == "keyboard";
+    const bool was_enabled = redraws(m_style);
     m_style = style;
     m_gamepad = gamepad;
     m_scale = scale;
@@ -423,17 +475,20 @@ bool ButtonLabels::configure(const std::string &style, const std::map<std::strin
         // when the line is empty)
         const auto it = gamepad.find(names.first);
         std::string bound = it != gamepad.end() ? trim(it->second.substr(0, it->second.find(','))) : std::string(names.second);
-        const Label label = label_of(bound, face);
+        // Nintendo's and the handhelds' face buttons are lettered by their own positions
+        const Label label = label_of(bound, style == "nintendo" || style == "handheld" ? nintendo_face() : face, style);
         if (!label.text.empty())
             m_labels[symbol] = label;
     }
-    const bool enabled = style == "xbox" || style == "keyboard";
+    const bool enabled = redraws(style);
     m_enabled = enabled;
     std::string letters;
     for (const auto &[position, letter] : face)
         letters += letter;
     if (style == "keyboard")
         LOG_INFO("Button labels: keyboard (at {}x, keys {})", scale, keys);
+    else if (style == "nintendo" || style == "handheld")
+        LOG_INFO("Button labels: {} (at {}x)", style == "nintendo" ? "Nintendo" : "Android handheld", scale);
     else
         LOG_INFO("Button labels: {}{}", enabled ? "Xbox" : "PlayStation",
             enabled ? fmt::format(" (at {}x{})", scale, letters.empty() ? "" : ", face buttons " + letters) : "");
@@ -455,7 +510,7 @@ bool ButtonLabels::make(SceGxmTextureBaseFormat format, uint32_t width, uint32_t
         return a.hash == hash && a.format == format && a.width == width && a.height == height;
     });
     std::lock_guard lock(m_mutex);
-    if (atlas == m_atlases.end() || (m_style != "xbox" && m_style != "keyboard")) {
+    if (atlas == m_atlases.end() || !redraws(m_style)) {
         if (atlas == m_atlases.end() && m_logged.insert(hash).second)
             LOG_DEBUG("Button labels: {}x{} texture {:016x} has no buttons we know", width, height, hash);
         return false;

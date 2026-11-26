@@ -17,15 +17,18 @@
 
 #pragma once
 
-// Xbox or keyboard button labels in a game's prompts: the game's textures with PlayStation buttons in
-// them are redrawn as they are uploaded (renderer::TextureOverride), each symbol painted over with the
-// letters of the gamepad button bound to it ([gamepad]; A, B, X, Y, LB, RB, LS, RS, and Xbox's Menu
-// and View symbols for START and SELECT), or with a keycap holding the key bound to it ([keyboard], the
-// first of two: X, C, F5, SPC, ENT, SHF, arrows ...). A game lists its textures (the hash of their data
-// and where the symbols are) and sets the override on the texture cache.
+// Xbox, Nintendo or keyboard button labels in a game's prompts: the game's textures with PlayStation
+// buttons in them are redrawn as they are uploaded (renderer::TextureOverride), each symbol painted
+// over with the letters of the gamepad button bound to it ([gamepad]; A, B, X, Y, LB, RB, LS, RS, and
+// Xbox's Menu and View symbols for START and SELECT; a Switch Pro Controller's letters, L, R, + and -;
+// on Android also a handheld's: Nintendo's letters, L1, R1, Xbox's Menu and View), or with a keycap holding
+// the key bound to it ([keyboard], the first of two: X, C, F5, SPC, ENT, SHF, arrows ...). A game lists
+// its textures (the hash of their data and where the symbols are) and sets the override on the texture
+// cache.
 //
 // Two kinds of texture: pictures (UBC1/UBC3: icon atlases, tutorial pictures), where a symbol is light
-// strokes in a dark ink blot and the letters come in their Xbox colours; and font pages (U8 with the
+// strokes in a dark ink blot and the letters come in their Xbox colours (white in the Nintendo and
+// handheld styles); and font pages (U8 with the
 // 1RRR swizzle, the value is the glyph's coverage), where a symbol's cell gets a circled letter (or a
 // keycap).
 
@@ -82,13 +85,16 @@ struct ButtonAtlas {
 
 uint64_t fnv1a64(const uint8_t *data, size_t size);
 
-// the [section] button_labels setting: playstation (the game's own icons), xbox, keyboard, or auto
+// the [section] button_labels setting: playstation (the game's own icons), xbox, nintendo, handheld
+// (Android only), keyboard, or auto
 SettingSpec button_labels_setting();
 
 // button_labels = auto, by the device used last (`last`): "keyboard" after a key or a mouse button;
-// otherwise the first connected gamepad's: "xbox" when it has lettered face buttons (`face` then gets
-// their letters by position, south/east/west/north: a Nintendo-style pad's A is east), "playstation"
-// for PlayStation symbols; with no gamepad "keyboard" (Android: "playstation", the on-screen controls)
+// otherwise the first connected gamepad's: "nintendo" when its face buttons are lettered as a Nintendo
+// pad's (A east), "xbox" for other lettered face buttons (`face` then gets their letters by position,
+// south/east/west/north), "playstation" for PlayStation symbols; with no gamepad "keyboard" (Android:
+// "playstation", the on-screen controls). Never "handheld": a handheld's built-in pad reports as an
+// Xbox pad (the AYN Thor's is an "Xbox Wireless Controller"), so that one is chosen by hand
 std::string auto_button_style(const CtrlState &ctrl, std::map<std::string, std::string> &face,
     InputDevice last = InputDevice::None);
 
@@ -96,7 +102,8 @@ class ButtonLabels : public renderer::TextureOverride {
 public:
     explicit ButtonLabels(std::vector<ButtonAtlas> atlases);
 
-    // style: "xbox", "keyboard" or "playstation"; gamepad: [gamepad] (Vita button -> gamepad button);
+    // style: "xbox", "nintendo", "handheld", "keyboard" or "playstation"; gamepad: [gamepad] (Vita
+    // button -> gamepad button);
     // scale: the pictures' size as a multiple of the textures' (the internal resolution, 1-4); face: the
     // face buttons' letters where they differ from an Xbox pad's (auto_button_style); keyboard:
     // [keyboard] (Vita button -> keys). Main thread. Returns true when the pictures change (then

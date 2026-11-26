@@ -853,10 +853,11 @@ std::vector<game_frontend::ButtonAtlas> button_atlases() {
 
 // --button-labels-test <in> <out>: the labels drawn on the one-texture GXT files in <in> (extracted
 // from the game's archives, tools/lspk.py) as PNGs in <out>, at [display] scale; [gamepad] and [keyboard]
-// as set. Keyboard labels with [game] button_labels = keyboard (--set game.button_labels=keyboard), Xbox
-// ones otherwise
+// as set. The labels of [game] button_labels (--set game.button_labels=keyboard, nintendo, or on Android
+// handheld), Xbox ones for playstation and auto
 int button_labels_test(game_frontend::ButtonLabels &labels, const game_frontend::Settings &settings, const fs::path &in, const fs::path &out) {
-    const std::string style = settings.values.get("game.button_labels") == "keyboard" ? "keyboard" : "xbox";
+    const std::string set = settings.values.get("game.button_labels");
+    const std::string style = set == "playstation" || set == "auto" ? "xbox" : set;
     labels.configure(style, settings.gamepad, static_cast<int>(std::lround(settings.scale)), {}, settings.keyboard);
     fs::create_directories(out);
     int written = 0;
@@ -942,9 +943,9 @@ int main(int argc, char *argv[]) {
                     "  --slot <1-3>                the game's save slot for the two above (default 1)\n"
                     "  --quiet                     no message box for the two above (the result is in the log)\n"
                     "Development:\n"
-                    "  --button-labels-test <in> <out>  the Xbox button labels (keyboard ones with --set\n"
-                    "                              game.button_labels=keyboard) drawn on the textures (.gxt) in\n"
-                    "                              <in>, as PNGs in <out>; then quit\n";
+                    "  --button-labels-test <in> <out>  the Xbox button labels (others with --set\n"
+                    "                              game.button_labels=keyboard or nintendo) drawn on the textures\n"
+                    "                              (.gxt) in <in>, as PNGs in <out>; then quit\n";
 
     auto &hooks = profile.hooks;
     hooks.parse_arg = [&](game_frontend::Context &, const std::vector<std::string> &args, size_t &i) {

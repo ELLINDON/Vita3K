@@ -127,6 +127,9 @@ struct State {
     // on Vulkan, this is actually the number of pipelines compiled
     uint32_t shaders_count_compiled = 0;
     uint32_t programs_count_pre_compiled = 0;
+    // every pipeline the Vulkan renderer has compiled, never reset (shaders_count_compiled is the
+    // on-screen notice's): the log's hitch lines say how many were built during a slow frame
+    std::atomic<uint32_t> pipelines_built{ 0 };
 
     bool should_display;
 

@@ -8,6 +8,7 @@
 // Frontend pause is independent of guest and debugger suspension.
 class CooperativePause {
     std::atomic<bool> paused_{ false };
+    std::atomic<uint32_t> pauses_{ 0 };
     std::mutex mutex_;
     std::condition_variable changed_;
 
@@ -16,8 +17,14 @@ public:
         return paused_.load(std::memory_order_acquire);
     }
 
+    // how many times pause() was called: a timer can tell whether a pause fell inside what it measured
+    uint32_t pause_count() const {
+        return pauses_.load(std::memory_order_acquire);
+    }
+
     void pause() {
         const std::lock_guard<std::mutex> lock(mutex_);
+        pauses_.fetch_add(1, std::memory_order_acq_rel);
         paused_.store(true, std::memory_order_release);
     }
 

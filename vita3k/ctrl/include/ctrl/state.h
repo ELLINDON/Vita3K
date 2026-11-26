@@ -99,6 +99,9 @@ struct CtrlState {
     // open), and Enter pressed on that dialog after it
     std::vector<std::string> injected_texts;
     bool injected_text_submit = false;
+    // SDL key names (F5, F12 ...) the test driver presses and releases, as the window's own key events (the
+    // frontend pushes them into SDL's queue): a frontend's own keys without the window's focus
+    std::vector<std::string> injected_keys;
     // (frame count, folder) recordings the test driver asked for
     std::vector<std::pair<int, std::string>> injected_records;
     // front-touch fingers the test driver holds, in 960x544 screen points (the frontend applies them)

@@ -23,10 +23,47 @@
 #include <kernel/state.h>
 #include <packages/functions.h>
 #include <renderer/state.h>
+#include <util/log.h>
 #include <util/types.h>
 
 #include <util/tracy.h>
 TRACY_MODULE_NAME(SceDisplay);
+
+#include <chrono>
+#include <cstdlib>
+
+// A game frame that took longer than VITA3K_HITCH_MS milliseconds (the game frontend's [debug]
+// hitch_log_ms; unset or 0: off) gets a line in the log with how many pipelines the renderer built
+// meanwhile, so a stutter report's log shows whether new shaders were behind it. Measured between
+// two sceDisplaySetFrameBuf calls; a stretch with a frontend pause (the settings menu, Android's
+// background) in it isn't one. Called from sceDisplaySetFrameBuf only, which one guest thread calls.
+static void log_hitch(EmuEnvState &emuenv, uint64_t frame) {
+    static const int64_t threshold_ms = [] {
+        const char *value = std::getenv("VITA3K_HITCH_MS");
+        return value ? std::strtoll(value, nullptr, 10) : 0;
+    }();
+    if (threshold_ms <= 0)
+        return;
+    // loading screens can leave a line each: a run's log keeps the first ones
+    constexpr int max_lines = 200;
+    static int lines = 0;
+    static std::chrono::steady_clock::time_point last{};
+    static uint32_t last_pauses = 0, last_pipelines = 0;
+
+    const auto now = std::chrono::steady_clock::now();
+    const uint32_t pauses = emuenv.kernel.session_pause.pause_count();
+    const uint32_t pipelines = emuenv.renderer ? emuenv.renderer->pipelines_built.load(std::memory_order_relaxed) : 0;
+    const bool first = last == std::chrono::steady_clock::time_point{};
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count();
+    if (!first && pauses == last_pauses && ms > threshold_ms && lines < max_lines) {
+        ++lines;
+        LOG_INFO("Hitch: frame {} took {} ms ({} new pipelines){}", frame, ms, pipelines - last_pipelines,
+            lines == max_lines ? "; later hitches aren't logged" : "");
+    }
+    last = now;
+    last_pauses = pauses;
+    last_pipelines = pipelines;
+}
 
 static int display_wait(EmuEnvState &emuenv, SceUID thread_id, int vcount, const bool is_since_setbuf, const bool is_cb) {
     const auto &thread = emuenv.kernel.get_thread(thread_id);
@@ -158,6 +195,7 @@ EXPORT(SceInt32, _sceDisplaySetFrameBuf, const SceDisplayFrameBuf *pFrameBuf, Sc
 
     emuenv.display.last_setframe_vblank_count = emuenv.display.vblank_count.load();
     emuenv.frame_count++;
+    log_hitch(emuenv, emuenv.display.frames_set.fetch_add(1, std::memory_order_relaxed) + 1);
 
 #ifdef TRACY_ENABLE
     FrameMarkNamed("SCE frame buffer"); // Tracy - Secondary frame end mark for the emulated frame buffer

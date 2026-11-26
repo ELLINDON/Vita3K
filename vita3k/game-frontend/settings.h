@@ -129,6 +129,7 @@ struct Settings {
     std::string shader_blend = "auto"; // auto, on, off (renderer: VITA3K_SHADER_BLEND unset, 1, 0)
     bool net_trace = false; // every Ad Hoc packet in the log (net: VITA3K_NET_TRACE=1)
     int gpu = 0; // 0: Vita3K's choice (a discrete GPU first); N: the Nth Vulkan device the log lists
+    int hitch_log_ms = 100; // a slower game frame is logged (SceDisplay: VITA3K_HITCH_MS); 0 off
     std::string gpu_driver = "auto"; // Android: auto, system, or a libadrenotools package in the app's files/driver/
     // [keyboard] and [gamepad]: Vita button -> keys / gamepad button, applied by input.cpp
     std::map<std::string, std::string> keyboard, gamepad;

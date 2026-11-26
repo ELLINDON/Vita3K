@@ -861,6 +861,7 @@ void PipelineCache::compiler_thread(MemState &mem) {
         next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
 
         state.shaders_count_compiled++;
+        state.pipelines_built.fetch_add(1, std::memory_order_relaxed);
 
         delete request;
     }
@@ -1071,8 +1072,10 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
 
-        if (!already_in_cache)
+        if (!already_in_cache) {
             state.shaders_count_compiled++;
+            state.pipelines_built.fetch_add(1, std::memory_order_relaxed);
+        }
 
         it->second = result;
 

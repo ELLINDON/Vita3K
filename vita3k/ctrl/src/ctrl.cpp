@@ -260,6 +260,11 @@ static void apply_injected_command(CtrlState &state, const std::string &line) {
         }
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_texts.push_back(std::move(text));
+    } else if (command == "key") {
+        std::string name;
+        std::getline(words >> std::ws, name);
+        std::lock_guard<std::mutex> guard(state.mutex);
+        state.injected_keys.push_back(std::move(name));
     } else if (command == "textsubmit") {
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_text_submit = true;

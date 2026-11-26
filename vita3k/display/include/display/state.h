@@ -71,6 +71,9 @@ struct DisplayState {
     std::atomic<std::uint64_t> vblank_count{ 0 };
     WaitQueue<VBlankWaitEntry> vblank_waiters;
     std::atomic<uint64_t> last_setframe_vblank_count = 0;
+    // every frame the game has handed sceDisplaySetFrameBuf since it started (EmuEnvState::frame_count
+    // restarts every second): the frame number in the log's hitch and user mark lines
+    std::atomic<uint64_t> frames_set{ 0 };
     std::map<SceUID, CallbackPtr> vblank_callbacks{};
     // vblanks that sceDisplayWaitVblankStart(CB) waits for: 1 as on the Vita; a game's front end
     // sets 2 to run a game that waits once per frame at 30 fps for a while (shinobido2)

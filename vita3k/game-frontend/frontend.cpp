@@ -746,6 +746,9 @@ int run(Profile &profile, int argc, char *argv[]) {
         set_env("VITA3K_NET_TRACE", "1");
     if (const char *trace = std::getenv("VITA3K_NET_TRACE"); trace && trace[0] == '1')
         LOG_INFO("Ad Hoc Play: every packet sent and received is logged ([debug] net_trace)");
+    // [debug] hitch_log_ms: SceDisplay logs a slower game frame; read once, before the game starts
+    if (!std::getenv("VITA3K_HITCH_MS"))
+        set_env("VITA3K_HITCH_MS", std::to_string(settings.hitch_log_ms));
     cfg.disable_surface_sync = settings.surface_sync == 3;
     cfg.memory_mapping = "double-buffer";
 #ifdef __ANDROID__
@@ -977,6 +980,7 @@ int run(Profile &profile, int argc, char *argv[]) {
     std::vector<input::PhysicalKeyCode> capture_keys;
     bool capture_wanted = false; // the player captured the cursor
     bool captured = false; // SDL's relative mouse mode is on
+    int user_marks = 0; // F5's lines in the log
     const auto configure_mouse = [&](bool report) {
         if (!has_mouse_camera)
             return;
@@ -1252,7 +1256,12 @@ int run(Profile &profile, int argc, char *argv[]) {
                     open_menu();
             } else if (event.key.key == SDLK_ESCAPE && menu)
                 close_menu();
-            else if (event.key.key == SDLK_F11 || (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT)))
+            else if (event.key.key == SDLK_F5) {
+                // "that just happened": a line in the log to find the moment by in a bug report. A
+                // binding on F5 still presses its button
+                LOG_INFO("User mark {} at frame {} (F5)", ++user_marks, emuenv.display.frames_set.load());
+                keyboard.key(emuenv, event.key.scancode, true);
+            } else if (event.key.key == SDLK_F11 || (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT)))
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
             else if (event.key.key == SDLK_F12) {
                 const auto t = std::time(nullptr);
@@ -1371,6 +1380,29 @@ int run(Profile &profile, int argc, char *argv[]) {
                 close_menu();
             else
                 open_menu();
+        }
+        // keys the test driver pressed (v3kdrive key:<name>): down and up through SDL's queue, so they
+        // reach on_event as the window's own would
+        std::vector<std::string> keys;
+        {
+            const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
+            keys.swap(emuenv.ctrl.injected_keys);
+        }
+        for (const auto &name : keys) {
+            const SDL_Keycode key = SDL_GetKeyFromName(name.c_str());
+            if (key == SDLK_UNKNOWN) {
+                LOG_WARN("Input pipe: no key named '{}'", name);
+                continue;
+            }
+            for (const bool down : { true, false }) {
+                SDL_Event event{};
+                event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                event.key.windowID = window ? SDL_GetWindowID(window) : 0;
+                event.key.key = key;
+                event.key.scancode = SDL_GetScancodeFromKey(key, nullptr);
+                event.key.down = down;
+                SDL_PushEvent(&event);
+            }
         }
         if (menu) {
             for (const auto &change : menu->take_changes())

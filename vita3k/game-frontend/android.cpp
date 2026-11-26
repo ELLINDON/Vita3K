@@ -28,6 +28,7 @@
 
 #ifdef __ANDROID__
 
+#include <app/session_controller.h>
 #include <ctrl/ctrl.h>
 #include <ctrl/state.h>
 #include <emuenv/state.h>
@@ -59,6 +60,19 @@ SDL_Window *s_window = nullptr;
 // game's window exists and once the frontend leaves)
 std::mutex s_emuenv_mutex;
 EmuEnvState *s_emuenv = nullptr;
+// the running game's session, for the pause in the background (guarded by s_emuenv_mutex; null
+// outside sdl_frontend::run)
+app::AppSessionController *s_session = nullptr;
+
+// The game pauses while the app is in the background, as behind the settings menu (the session's
+// Background reason; during Ad Hoc Play it keeps running, session_controller.cpp). Without it the
+// game went on behind the home screen with no surface to draw on, at more CPU than in front (Thor,
+// ss-delta #29).
+void pause_in_background(bool background) {
+    const std::lock_guard<std::mutex> lock(s_emuenv_mutex);
+    if (s_session && s_session->set_pause_reason(app::AppSessionPauseReason::Background, background))
+        LOG_INFO("Android: the app {} the screen", background ? "left" : "is back on");
+}
 
 // Android may kill a paused app without another word (swiped away from the recent apps): the log
 // is written on a thread of its own, so its last lines are flushed when the app leaves the screen.
@@ -66,10 +80,15 @@ EmuEnvState *s_emuenv = nullptr;
 bool SDLCALL flush_logs_on_pause(void *, SDL_Event *event) {
     switch (event->type) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        pause_in_background(true);
+        [[fallthrough]];
     case SDL_EVENT_DID_ENTER_BACKGROUND:
     case SDL_EVENT_TERMINATING:
     case SDL_EVENT_LOW_MEMORY:
         spdlog::apply_all([](const std::shared_ptr<spdlog::logger> &logger) { logger->flush(); });
+        break;
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+        pause_in_background(false);
         break;
     default:
         break;
@@ -205,6 +224,12 @@ void android_window_created(SDL_Window *window) {
 void android_set_emuenv(EmuEnvState *emuenv) {
     const std::lock_guard<std::mutex> lock(s_emuenv_mutex);
     s_emuenv = emuenv;
+}
+
+// the game's session, for the pause in the background (null: it is gone)
+void android_set_session(app::AppSessionController *session) {
+    const std::lock_guard<std::mutex> lock(s_emuenv_mutex);
+    s_session = session;
 }
 
 // Calls a method of GameActivity, `call(env, activity, method)`, from the game's thread. The setup's

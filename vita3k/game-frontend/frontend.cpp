@@ -92,6 +92,7 @@ void android_window_created(SDL_Window *window); // android.cpp
 void android_install_driver_packages(const fs::path &game_dir); // android.cpp
 std::string android_gpu_driver(const std::string &setting); // android.cpp
 void android_set_emuenv(EmuEnvState *emuenv); // android.cpp
+void android_set_session(app::AppSessionController *session); // android.cpp
 void android_configure_screen_controls(bool enabled, int size, int opacity, const std::vector<std::pair<float, float>> &spots,
     uint32_t latch_button, const std::string &latch_label);
 void android_settings_menu_open(bool open);
@@ -1477,6 +1478,13 @@ int run(Profile &profile, int argc, char *argv[]) {
 
     app::AppSessionController session(emuenv);
     session_ptr = &session;
+#ifdef __ANDROID__
+    // the pause in the background (android.cpp) reaches the session until run() leaves, before it goes
+    android_set_session(&session);
+    struct SessionLink {
+        ~SessionLink() { android_set_session(nullptr); }
+    } session_link;
+#endif
     const int exit_code = sdl_frontend::run(emuenv, session, AppLaunchRequest{ .app_path = profile.title_id }, hooks);
 
 #ifdef _WIN32

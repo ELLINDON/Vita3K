@@ -27,6 +27,7 @@
 #include <io/state.h>
 #include <kernel/state.h>
 #include <motion/state.h>
+#include <net/state.h>
 #include <renderer/functions.h>
 #include <util/log.h>
 
@@ -217,9 +218,19 @@ void AppSessionController::stop(const AppSessionStopReason reason) {
 
 void AppSessionController::apply_runtime_state_locked() {
     const bool paused = active_pause_reasons.load(std::memory_order_relaxed) != 0;
+    // Ad Hoc Play: the game keeps running behind a pause (audio, input and the picture still stop).
+    // Its matching and traffic are guest threads, and the other players drop a copy whose threads
+    // stand still for about 20 s (ss-delta#29: a guest paused for 30 s was gone from the host's room
+    // and found itself the host of its own).
+    bool adhoc;
+    {
+        const std::lock_guard<std::mutex> lock(emuenv.netctl.mutex);
+        adhoc = emuenv.netctl.adhocState != SCE_NET_CTL_STATE_DISCONNECTED;
+    }
+    const bool freeze = paused && !adhoc;
     const bool currently_paused = emuenv.kernel.is_threads_paused();
-    if (currently_paused != paused) {
-        if (paused)
+    if (currently_paused != freeze) {
+        if (freeze)
             emuenv.kernel.pause_threads();
         else
             emuenv.kernel.resume_threads();

@@ -48,6 +48,7 @@
 #include <mem/functions.h>
 #include <modules/module_parent.h>
 #include <packages/functions.h>
+#include <packages/license.h>
 #include <packages/pkg.h>
 #include <renderer/state.h>
 #include <sdl-frontend/session.h>
@@ -77,6 +78,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <mutex>
@@ -274,8 +276,20 @@ void record_frames(EmuEnvState &emuenv, const fs::path &dir, int count) {
     renderer->run_on_render_thread(*step);
 }
 
+// the content ID a licence file (work.bin, .rif: SceNpDrmLicense) is for, or empty when it can't be read
+std::string license_content_id(const std::string &license) {
+    fs::ifstream file(fs_utils::utf8_to_path(license), std::ios::binary);
+    SceNpDrmLicense rif{};
+    if (!file || !file.read(reinterpret_cast<char *>(&rif), sizeof(rif)))
+        return {};
+    return std::string(rif.content_id, strnlen(rif.content_id, sizeof(rif.content_id)));
+}
+
 // a pkg's licence as a zRIF: from --zrif, from a licence file (work.bin, .rif), or, for a patch or
-// a game installed before, from the licence already in the Vita file system
+// a game installed before, from the licence already in the Vita file system. A licence file for
+// other content (another game's work.bin picked by mistake, ss-delta #25) would only fail the pkg's
+// decryption with no word of why: it is refused by name, and the installed licence used when there
+// is one.
 std::string pkg_zrif(const fs::path &pkg, const std::string &zrif, const std::string &license, const fs::path &vita_fs) {
     if (!zrif.empty())
         return zrif;
@@ -285,7 +299,17 @@ std::string pkg_zrif(const fs::path &pkg, const std::string &zrif, const std::st
             LOG_ERROR("Licence {} could not be read", license);
             return {};
         }
-        return rif2zrif(file);
+        const std::string for_id = license_content_id(license);
+        const std::string pkg_id = pkg_content_id(pkg);
+        if (for_id.empty() || pkg_id.empty() || for_id == pkg_id)
+            return rif2zrif(file);
+        LOG_ERROR("Licence {} is for {}, not for {} ({}): it can't decrypt it", license, for_id, pkg, pkg_id);
+        if (std::string installed = find_pkg_zrif(pkg, vita_fs); !installed.empty()) {
+            LOG_WARN("{}: the licence already installed for {} is used instead", pkg, pkg_id);
+            return installed;
+        }
+        LOG_ERROR("{} needs the licence (work.bin or .rif) for {}", pkg, pkg_id);
+        return {};
     }
     return find_pkg_zrif(pkg, vita_fs);
 }
@@ -819,7 +843,7 @@ int run(Profile &profile, int argc, char *argv[]) {
             } else if (string_utils::tolower(path.extension().string()) == ".pkg") {
                 std::string zrif = pkg_zrif(path, item.zrif, item.license, emuenv.vita_fs_path);
                 if (zrif.empty()) {
-                    LOG_ERROR("{}: no licence (give --license <work.bin> or --zrif after it)", item.path);
+                    LOG_ERROR("{}: no licence that fits it (give --license <work.bin> or --zrif after it)", item.path);
                     ok = false;
                     continue;
                 }

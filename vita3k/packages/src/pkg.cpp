@@ -363,17 +363,24 @@ bool install_pkg(const fs::path &pkg_path, EmuEnvState &emuenv, std::string &p_z
     return true;
 }
 
-std::string find_pkg_zrif(const fs::path &pkg_path, const fs::path &vita_fs_path) {
+std::string pkg_content_id(const fs::path &pkg_path) {
     FILE *infile = FOPEN(pkg_path.c_str(), "rb");
     if (!infile)
         return {};
 
     PkgHeader pkg_header{};
-    fread(&pkg_header, sizeof(PkgHeader), 1, infile);
+    const bool read = fread(&pkg_header, sizeof(PkgHeader), 1, infile) == 1;
     fclose(infile);
+    if (!read)
+        return {};
 
-    const std::string content_id(pkg_header.content_id);
-    if (content_id.size() < 16)
+    const std::string content_id(pkg_header.content_id, strnlen(pkg_header.content_id, sizeof(pkg_header.content_id)));
+    return content_id.size() < 16 ? std::string() : content_id;
+}
+
+std::string find_pkg_zrif(const fs::path &pkg_path, const fs::path &vita_fs_path) {
+    const std::string content_id = pkg_content_id(pkg_path);
+    if (content_id.empty())
         return {};
 
     const std::string title_id = content_id.substr(7, 9);

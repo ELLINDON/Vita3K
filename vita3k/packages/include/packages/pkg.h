@@ -83,4 +83,6 @@ struct PkgEntry {
 
 bool install_pkg(const fs::path &pkg_path, EmuEnvState &emuenv, std::string &p_zRIF, const std::function<void(float)> &progress_callback = nullptr);
 std::string find_pkg_zrif(const fs::path &pkg_path, const fs::path &vita_fs_path);
+// the content ID in a pkg's header (EP9000-PCSF00532_00-SOULSACDELTAEU00), or empty when it can't be read
+std::string pkg_content_id(const fs::path &pkg_path);
 bool decrypt_install_nonpdrm(EmuEnvState &emuenv, const fs::path &drmlicpath, const fs::path &title_path, const std::function<void(float)> &progress_callback = nullptr);

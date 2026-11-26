@@ -143,6 +143,7 @@ game_frontend::IniLayout ini_layout() {
                         "the scenes after a loading screen stay at 30; the pause menu and HUD animate twice as\n"
                         "fast). Read when the game starts." },
                     layout::filter(),
+                    layout::fps_counter(),
                     layout::mipmaps(true) } },
             audio_layout(),
             game_layout(),

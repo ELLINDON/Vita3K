@@ -114,6 +114,7 @@ struct Settings {
     bool fullscreen = false;
     bool vsync = true;
     std::string filter = "Bilinear";
+    std::string fps_counter = "off"; // off, fps, frametime, stats, graph
     // [audio]
     int volume = 100;
     // [recompiled]
@@ -170,6 +171,8 @@ SettingSpec window_scale();
 SettingSpec fullscreen(const std::string &id, const std::string &exe);
 SettingSpec vsync();
 SettingSpec filter();
+// [display] fps_counter: Vita3K's performance overlay (Settings::fps_counter, perf_overlay_level())
+SettingSpec fps_counter();
 // [display] mipmaps: renderer::State::generate_mips, which the front end sets once the renderer exists
 SettingSpec mipmaps(bool on_by_default);
 // [game] repatch: the frontend serves ux0/rePatch/<title ID>/ in place of the game's files (repatch.h)

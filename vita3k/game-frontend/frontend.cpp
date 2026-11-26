@@ -72,6 +72,7 @@
 #include <stb_image_write.h>
 
 #include <array>
+#include <string_view>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -310,6 +311,16 @@ fs::path dump_license_file(const InstallItem &item, const fs::path &temp) {
     }
     zrif2rif(item.zrif, file);
     return temp;
+}
+
+// [display] fps_counter onto Vita3K's performance overlay (the renderer draws it): off, or its detail
+// levels in order (fps, frametime, stats, graph), in the top left corner
+void apply_fps_counter(Config &cfg, const std::string &value) {
+    static constexpr std::array<std::string_view, 4> levels{ "fps", "frametime", "stats", "graph" };
+    const auto it = std::find(levels.begin(), levels.end(), value);
+    cfg.performance_overlay = it != levels.end();
+    cfg.performance_overlay_detail = cfg.performance_overlay ? static_cast<int>(MINIMUM) + static_cast<int>(it - levels.begin()) : static_cast<int>(MINIMUM);
+    cfg.performance_overlay_position = static_cast<int>(TOP_LEFT);
 }
 
 } // namespace
@@ -722,6 +733,7 @@ int run(Profile &profile, int argc, char *argv[]) {
     cfg.resolution_multiplier = settings.scale;
     cfg.v_sync = settings.vsync;
     cfg.screen_filter = settings.filter;
+    apply_fps_counter(cfg, settings.fps_counter);
     // --dump-elfs runs the game unseen (a setup's step): no sound either
     cfg.audio_volume = dump_elfs_seconds > 0 ? 0 : settings.volume;
     if (profile.hooks.configure)
@@ -1016,6 +1028,10 @@ int run(Profile &profile, int argc, char *argv[]) {
             emuenv.renderer->set_vsync_state(change.value == "true");
         else if (key == "display.filter" && emuenv.renderer)
             emuenv.renderer->set_screen_filter(change.value);
+        else if (key == "display.fps_counter") {
+            apply_fps_counter(emuenv.cfg, change.value);
+            app::sync_perf_overlay_config(emuenv);
+        }
         else if (key == "audio.volume")
             emuenv.audio.set_global_volume(std::clamp(std::atoi(change.value.c_str()), 0, 100) / 100.f);
         else if (key == "multiplayer.peers" && !net_utils::local_adhoc_player())

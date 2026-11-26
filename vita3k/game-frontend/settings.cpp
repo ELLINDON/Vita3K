@@ -367,6 +367,8 @@ Settings load_settings(const fs::path &dir, const std::string &id, const IniLayo
         out.vsync = values.get_bool("display.vsync");
     if (declared("display.filter"))
         out.filter = values.get("display.filter");
+    if (declared("display.fps_counter"))
+        out.fps_counter = values.get("display.fps_counter");
     if (declared("audio.volume"))
         out.volume = values.get_int("audio.volume");
     if (declared("recompiled.enabled"))
@@ -497,6 +499,17 @@ SettingSpec filter() {
     SettingSpec s{ "filter", Kind::Choice, "Bilinear", 0, 0, { "Bilinear", "Nearest", "Bicubic", "FXAA", "FSR" },
         fmt::format("How the picture is scaled to {}: Bilinear, Nearest, Bicubic, FXAA, FSR.", target) };
     s.live = true;
+    return s;
+}
+
+SettingSpec fps_counter() {
+    SettingSpec s{ "fps_counter", Kind::Choice, "off", 0, 0, { "off", "fps", "frametime", "stats", "graph" },
+        "A frame counter in the top left corner: off, fps (frames a second), frametime (and the\n"
+        "milliseconds a frame), stats (and the lowest, average and highest of the last minute), graph\n"
+        "(and a graph of them)." };
+    s.live = true;
+    s.title = "FPS counter";
+    s.choice_labels = { "Off", "FPS", "FPS, frame time", "FPS, frame time, min/avg/max", "All, with a graph" };
     return s;
 }
 

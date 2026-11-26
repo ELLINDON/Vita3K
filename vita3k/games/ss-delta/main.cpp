@@ -167,6 +167,7 @@ game_frontend::IniLayout ini_layout() {
                 "The game's frame rate: 60, or 30 as on the Vita. The game keeps its speed at 60. Loading\n"
                 "screens run at 30 only with a game built before ss-delta 0.5.0 (build it again)." },
             layout::filter(),
+            layout::fps_counter(),
             // off: no visible change on the shimmering ST17 ground (the owner, 2026-10-14), so its cause
             // there is something else (**hypothesis**: explicit-LOD sampling or geometry)
             layout::mipmaps(false),

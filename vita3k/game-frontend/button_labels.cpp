@@ -300,16 +300,16 @@ ButtonLabels::Label label_of(const std::string &name, const std::map<std::string
     }
     // Xbox's, a Switch Pro Controller's (L, R, + and -), or the handhelds' (L1, R1, Xbox's Menu and View)
     static const std::map<std::string, std::string> xbox_others{
-        { "leftshoulder", "LB" }, { "rightshoulder", "RB" }, { "leftstick", "LS" }, { "rightstick", "RS" },
+        { "leftshoulder", "LB" }, { "rightshoulder", "RB" }, { "lefttrigger", "LT" }, { "righttrigger", "RT" }, { "leftstick", "LS" }, { "rightstick", "RS" },
         { "start", std::string(1, GLYPH_MENU) }, { "back", std::string(1, GLYPH_VIEW) }
     };
     static const std::map<std::string, std::string> nintendo_others{
-        { "leftshoulder", "L" }, { "rightshoulder", "R" }, { "leftstick", "LS" }, { "rightstick", "RS" },
+        { "leftshoulder", "L" }, { "rightshoulder", "R" }, { "lefttrigger", "ZL" }, { "righttrigger", "ZR" }, { "leftstick", "LS" }, { "rightstick", "RS" },
         { "start", std::string(1, GLYPH_PLUS) }, { "back", std::string(1, GLYPH_MINUS) }
     };
     // the handhelds print L1 and R1 on their shoulder buttons (Retroid Pocket, AYN)
     static const std::map<std::string, std::string> handheld_others{
-        { "leftshoulder", "L1" }, { "rightshoulder", "R1" }, { "leftstick", "LS" }, { "rightstick", "RS" },
+        { "leftshoulder", "L1" }, { "rightshoulder", "R1" }, { "lefttrigger", "L2" }, { "righttrigger", "R2" }, { "leftstick", "LS" }, { "rightstick", "RS" },
         { "start", std::string(1, GLYPH_MENU) }, { "back", std::string(1, GLYPH_VIEW) }
     };
     const auto &others = style == "nintendo" ? nintendo_others : style == "handheld" ? handheld_others : xbox_others;

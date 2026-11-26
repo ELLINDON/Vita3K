@@ -628,9 +628,11 @@ IniSection keyboard(const std::string &extra_help) {
 
 IniSection gamepad() {
     IniSection s{ "gamepad",
-        "Vita button = one gamepad button: south, east, west, north (the face buttons; on an Xbox pad\n"
-        "A, B, X, Y), leftshoulder, rightshoulder, start, back, guide, dpup, dpdown, dpleft, dpright,\n"
-        "leftstick, rightstick; nothing after the = unbinds it. The gamepad's sticks are the Vita's sticks." };
+        "Vita button = up to two gamepad buttons, comma separated: south, east, west, north (the face\n"
+        "buttons; on an Xbox pad A, B, X, Y), leftshoulder, rightshoulder, start, back, guide, dpup,\n"
+        "dpdown, dpleft, dpright, leftstick, rightstick, or a trigger, lefttrigger or righttrigger (which\n"
+        "stays a PS TV's L2 or R2 as well), e.g. up = dpup, righttrigger; nothing after the = unbinds it.\n"
+        "The gamepad's sticks are the Vita's sticks. The settings menu's Controls page changes them too." };
     s.free_keys = true;
     s.body = default_gamepad_lines();
     return s;
@@ -669,9 +671,9 @@ IniSection touch(const std::string &body) {
     IniSection s{ "touch",
         "Keys and gamepad buttons that hold a finger on the touchscreen for as long as they are held.\n"
         "Each touch is <name> = x, y (a point on the 960x544 screen), with <name>_key (up to two keys,\n"
-        "as in [keyboard]) and <name>_gamepad (one button as in [gamepad], or lefttrigger or\n"
-        "righttrigger). The mouse is the touchscreen as well. The settings menu's Controls page changes\n"
-        "the keys and buttons." };
+        "as in [keyboard]) and <name>_gamepad (up to two buttons or triggers, as in [gamepad]). The\n"
+        "mouse is the touchscreen as well. The settings menu's Controls page changes the keys and\n"
+        "buttons." };
     s.free_keys = true;
     s.body = body;
     return s;

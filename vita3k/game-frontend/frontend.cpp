@@ -103,6 +103,51 @@ void android_settings_menu_open(bool open);
 
 namespace {
 
+// The test driver's gamepad (the input pipe's "gamepad", v3kdrive gpad:): a virtual gamepad of SDL's,
+// attached on first use, holding exactly the inputs named. It reaches the game and the settings menu
+// as a real one does; from then on gamepads count without the window's focus too.
+void hold_test_gamepad(const std::vector<std::string> &names) {
+    static SDL_Joystick *joystick = nullptr;
+    // the triggers rest at the axis minimum (0 on the gamepad), the sticks at 0
+    const auto set_triggers = [](const std::set<int> &held) {
+        for (const int axis : { SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER })
+            SDL_SetJoystickVirtualAxis(joystick, axis, held.contains(axis) ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+    };
+    if (!joystick) {
+        // the test driver never gives the window focus, and SDL ignores gamepads without it
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.name = "Test driver gamepad";
+        const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+        joystick = id ? SDL_OpenJoystick(id) : nullptr;
+        if (!joystick) {
+            LOG_WARN("Input pipe: no virtual gamepad ({})", SDL_GetError());
+            return;
+        }
+        set_triggers({});
+        LOG_INFO("Input pipe: virtual gamepad attached");
+    }
+    std::set<int> buttons, axes;
+    for (const auto &name : names) {
+        const std::string lower = string_utils::tolower(name);
+        if (lower == "lefttrigger")
+            axes.insert(SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+        else if (lower == "righttrigger")
+            axes.insert(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+        else if (const int button = gamepad_button_from_name(lower); button >= 0)
+            buttons.insert(button);
+        else
+            LOG_WARN("Input pipe: no gamepad input named '{}'", name);
+    }
+    for (int button = 0; button < SDL_GAMEPAD_BUTTON_COUNT; button++)
+        SDL_SetJoystickVirtualButton(joystick, button, buttons.contains(button));
+    set_triggers(axes);
+}
+
 void set_env(const char *name, const std::string &value) {
 #ifdef _WIN32
     _putenv_s(name, value.c_str());
@@ -802,7 +847,7 @@ int run(Profile &profile, int argc, char *argv[]) {
         app::reset_controller_binding(emuenv);
     {
         std::vector<std::string> binding_warnings;
-        apply_bindings(emuenv.cfg, settings.keyboard, settings.gamepad, binding_warnings);
+        apply_bindings(emuenv, settings.keyboard, settings.gamepad, binding_warnings);
         for (const auto &line : binding_warnings)
             LOG_WARN("{}.ini: {}", profile.id, line);
     }
@@ -1067,7 +1112,7 @@ int run(Profile &profile, int argc, char *argv[]) {
                 const bool is_keyboard = change.section == "keyboard";
                 (is_keyboard ? settings.keyboard : settings.gamepad)[change.key] = change.value;
                 const std::map<std::string, std::string> line{ { change.key, change.value } };
-                apply_bindings(emuenv.cfg, is_keyboard ? line : std::map<std::string, std::string>{},
+                apply_bindings(emuenv, is_keyboard ? line : std::map<std::string, std::string>{},
                     is_keyboard ? std::map<std::string, std::string>{} : line, warnings);
                 keyboard.refresh(emuenv);
             }
@@ -1382,12 +1427,16 @@ int run(Profile &profile, int argc, char *argv[]) {
                 open_menu();
         }
         // keys the test driver pressed (v3kdrive key:<name>): down and up through SDL's queue, so they
-        // reach on_event as the window's own would
+        // reach on_event as the window's own would; and the gamepad inputs it holds (v3kdrive gpad:)
         std::vector<std::string> keys;
+        std::optional<std::vector<std::string>> pad_inputs;
         {
             const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
             keys.swap(emuenv.ctrl.injected_keys);
+            pad_inputs.swap(emuenv.ctrl.injected_gamepad);
         }
+        if (pad_inputs)
+            hold_test_gamepad(*pad_inputs);
         for (const auto &name : keys) {
             const SDL_Keycode key = SDL_GetKeyFromName(name.c_str());
             if (key == SDLK_UNKNOWN) {

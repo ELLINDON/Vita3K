@@ -91,6 +91,45 @@ SDL_GamepadButton parse_gamepad_button(const std::string &name) {
     return static_cast<SDL_GamepadButton>(gamepad_button_from_name(name));
 }
 
+// a gamepad button or a trigger, as [gamepad] and [touch] name them
+struct GamepadInput {
+    int button = -1; // SDL_GamepadButton
+    int axis = -1; // SDL_GamepadAxis (a trigger)
+    bool operator==(const GamepadInput &) const = default;
+};
+std::optional<GamepadInput> parse_gamepad_input(const std::string &name) {
+    const std::string lower = string_utils::tolower(trim(name));
+    if (lower == "lefttrigger")
+        return GamepadInput{ -1, SDL_GAMEPAD_AXIS_LEFT_TRIGGER };
+    if (lower == "righttrigger")
+        return GamepadInput{ -1, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER };
+    const SDL_GamepadButton button = parse_gamepad_button(lower);
+    if (button == SDL_GAMEPAD_BUTTON_INVALID)
+        return std::nullopt;
+    return GamepadInput{ button, -1 };
+}
+
+// up to two gamepad inputs from a list, a repeated one left out; an unknown name adds "<setting>:
+// unknown gamepad button" to `warnings`, a third "<setting>: only two ..."
+std::vector<GamepadInput> parse_gamepad_inputs(const std::vector<std::string> &list, const std::string &setting, std::vector<std::string> &warnings) {
+    std::vector<GamepadInput> inputs;
+    bool dropped = false;
+    for (const auto &name : list) {
+        const auto input = parse_gamepad_input(name);
+        if (!input)
+            warnings.push_back(setting + ": unknown gamepad button \"" + name + "\"");
+        else if (std::find(inputs.begin(), inputs.end(), *input) != inputs.end())
+            continue;
+        else if (inputs.size() < 2)
+            inputs.push_back(*input);
+        else
+            dropped = true;
+    }
+    if (dropped)
+        warnings.push_back(setting + ": only two gamepad buttons, the rest are ignored");
+    return inputs;
+}
+
 } // namespace
 
 const std::vector<ButtonBinding> &button_bindings() {
@@ -266,8 +305,9 @@ std::string gamepad_display_name(const std::string &name) {
     return out;
 }
 
-void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keyboard,
+void apply_bindings(EmuEnvState &emuenv, const std::map<std::string, std::string> &keyboard,
     const std::map<std::string, std::string> &gamepad, std::vector<std::string> &warnings) {
+    Config &cfg = emuenv.cfg;
     struct KeyBinding {
         PhysicalKeyCode Config::*primary;
         PhysicalKeyCode Config::*alternate;
@@ -319,15 +359,26 @@ void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keybo
         cfg.*(it->second.alternate) = codes.size() > 1 ? codes[1] : PhysicalKeyCode::Unbound;
     }
 
-    // Vita3K's gamepad bindings: controller_binds[slot] is the gamepad button that presses the
-    // Vita button the slot stands for
-    static const std::map<std::string, SDL_GamepadButton> slots{
-        { "cross", SDL_GAMEPAD_BUTTON_SOUTH }, { "circle", SDL_GAMEPAD_BUTTON_EAST },
-        { "square", SDL_GAMEPAD_BUTTON_WEST }, { "triangle", SDL_GAMEPAD_BUTTON_NORTH },
-        { "l", SDL_GAMEPAD_BUTTON_LEFT_SHOULDER }, { "r", SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER },
-        { "start", SDL_GAMEPAD_BUTTON_START }, { "select", SDL_GAMEPAD_BUTTON_BACK },
-        { "up", SDL_GAMEPAD_BUTTON_DPAD_UP }, { "down", SDL_GAMEPAD_BUTTON_DPAD_DOWN },
-        { "left", SDL_GAMEPAD_BUTTON_DPAD_LEFT }, { "right", SDL_GAMEPAD_BUTTON_DPAD_RIGHT },
+    // Vita3K's gamepad bindings: controller_binds[slot] is the gamepad button that presses the Vita
+    // button the slot stands for. It takes one button: a second one, and a trigger, go into the
+    // controller's extra bindings (ExtraGamepadBinding), with the Vita button's bits.
+    struct Slot {
+        SDL_GamepadButton slot;
+        uint32_t vita_button, vita_button_ext;
+    };
+    static const std::map<std::string, Slot> slots{
+        { "cross", { SDL_GAMEPAD_BUTTON_SOUTH, SCE_CTRL_CROSS, SCE_CTRL_CROSS } },
+        { "circle", { SDL_GAMEPAD_BUTTON_EAST, SCE_CTRL_CIRCLE, SCE_CTRL_CIRCLE } },
+        { "square", { SDL_GAMEPAD_BUTTON_WEST, SCE_CTRL_SQUARE, SCE_CTRL_SQUARE } },
+        { "triangle", { SDL_GAMEPAD_BUTTON_NORTH, SCE_CTRL_TRIANGLE, SCE_CTRL_TRIANGLE } },
+        { "l", { SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SCE_CTRL_L, SCE_CTRL_L1 } },
+        { "r", { SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SCE_CTRL_R, SCE_CTRL_R1 } },
+        { "start", { SDL_GAMEPAD_BUTTON_START, SCE_CTRL_START, SCE_CTRL_START } },
+        { "select", { SDL_GAMEPAD_BUTTON_BACK, SCE_CTRL_SELECT, SCE_CTRL_SELECT } },
+        { "up", { SDL_GAMEPAD_BUTTON_DPAD_UP, SCE_CTRL_UP, SCE_CTRL_UP } },
+        { "down", { SDL_GAMEPAD_BUTTON_DPAD_DOWN, SCE_CTRL_DOWN, SCE_CTRL_DOWN } },
+        { "left", { SDL_GAMEPAD_BUTTON_DPAD_LEFT, SCE_CTRL_LEFT, SCE_CTRL_LEFT } },
+        { "right", { SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SCE_CTRL_RIGHT, SCE_CTRL_RIGHT } },
     };
     for (const auto &[name, value] : gamepad) {
         const auto it = slots.find(name);
@@ -335,22 +386,26 @@ void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keybo
             warnings.push_back("gamepad." + name + " (no such Vita button)");
             continue;
         }
+        const Slot &slot = it->second;
         const auto list = split_list(value);
-        if (list.empty()) {
-            // no gamepad button presses it
-            if (static_cast<size_t>(it->second) < cfg.controller_binds.size())
-                cfg.controller_binds[it->second] = static_cast<short>(SDL_GAMEPAD_BUTTON_INVALID);
-            continue;
+        const auto inputs = parse_gamepad_inputs(list, "gamepad." + name, warnings);
+        if (inputs.empty() && !list.empty())
+            continue; // nothing usable: keep the binding rather than unbind the button
+        // the first button stays Vita3K's; everything else (an empty list: nothing) is extra
+        int first = SDL_GAMEPAD_BUTTON_INVALID;
+        std::vector<ExtraGamepadBinding> extra;
+        for (const auto &input : inputs) {
+            if (input.button >= 0 && first == SDL_GAMEPAD_BUTTON_INVALID)
+                first = input.button;
+            else
+                extra.push_back({ input.button, input.axis, slot.vita_button, slot.vita_button_ext });
         }
-        if (list.size() > 1)
-            warnings.push_back("gamepad." + name + ": one gamepad button per Vita button, the rest are ignored");
-        const SDL_GamepadButton button = parse_gamepad_button(list[0]);
-        if (button == SDL_GAMEPAD_BUTTON_INVALID) {
-            warnings.push_back("gamepad." + name + ": unknown gamepad button \"" + list[0] + "\"");
-            continue;
-        }
-        if (static_cast<size_t>(it->second) < cfg.controller_binds.size())
-            cfg.controller_binds[it->second] = static_cast<short>(button);
+        if (static_cast<size_t>(slot.slot) < cfg.controller_binds.size())
+            cfg.controller_binds[slot.slot] = static_cast<short>(first);
+        const std::lock_guard<std::mutex> lock(emuenv.ctrl.mutex);
+        auto &binds = emuenv.ctrl.extra_gamepad_binds;
+        std::erase_if(binds, [&](const ExtraGamepadBinding &b) { return b.vita_button == slot.vita_button && b.vita_button_ext == slot.vita_button_ext; });
+        binds.insert(binds.end(), extra.begin(), extra.end());
     }
 }
 
@@ -617,17 +672,11 @@ void Touches::configure(const std::vector<TouchBinding> &touches, std::vector<st
             else if (b.keys.size() < 2)
                 b.keys.push_back(code);
         }
-        const std::string pad = string_utils::tolower(trim(touch.gamepad));
-        if (pad == "lefttrigger")
-            b.gamepad_axis = SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
-        else if (pad == "righttrigger")
-            b.gamepad_axis = SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
-        else if (!pad.empty()) {
-            const SDL_GamepadButton button = parse_gamepad_button(pad);
-            if (button == SDL_GAMEPAD_BUTTON_INVALID)
-                warnings.push_back("touch." + touch.name + "_gamepad: unknown gamepad button \"" + touch.gamepad + "\"");
+        for (const auto &input : parse_gamepad_inputs(split_list(touch.gamepad), "touch." + touch.name + "_gamepad", warnings)) {
+            if (input.button >= 0)
+                b.gamepad_buttons.push_back(input.button);
             else
-                b.gamepad_button = button;
+                b.gamepad_axes.push_back(input.axis);
         }
         bindings.push_back(std::move(b));
     }
@@ -648,10 +697,10 @@ void Touches::update(EmuEnvState &emuenv, const Keyboard &keyboard) {
                 SDL_Gamepad *pad = controller.controller.get();
                 if (!pad)
                     continue;
-                if (b.gamepad_button >= 0 && SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(b.gamepad_button)))
-                    down = true;
-                if (b.gamepad_axis >= 0 && SDL_GetGamepadAxis(pad, static_cast<SDL_GamepadAxis>(b.gamepad_axis)) > 16384)
-                    down = true;
+                for (const int button : b.gamepad_buttons)
+                    down = down || SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(button));
+                for (const int axis : b.gamepad_axes)
+                    down = down || SDL_GetGamepadAxis(pad, static_cast<SDL_GamepadAxis>(axis)) > 16384;
             }
             // ids that stay the same while a finger is down, apart from the mouse's (0-127)
             if (down && b.target) {

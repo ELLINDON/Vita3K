@@ -43,7 +43,7 @@ struct ButtonBinding {
     const char *name; // the key in [keyboard] and [gamepad]
     const char *title;
     const char *keys; // the default keys, as in [keyboard]
-    const char *gamepad; // the default gamepad button, as in [gamepad]; empty: [gamepad] has no line for it
+    const char *gamepad; // the default gamepad button(s), as in [gamepad]; empty: [gamepad] has no line for it
     const char *fixed_gamepad; // what drives it on a gamepad when [gamepad] can't change it (a stick, a trigger)
     bool in_default_file = true; // [keyboard] in the default file has a line for it
 };
@@ -52,10 +52,10 @@ const std::vector<ButtonBinding> &button_bindings();
 std::string default_keyboard_lines();
 std::string default_gamepad_lines();
 
-// Applies [keyboard] and [gamepad] (Vita button -> keys / gamepad button) to the config; lines
-// that can't be used are added to `warnings`. An empty value unbinds the Vita button; a line left
-// out keeps the binding the config has.
-void apply_bindings(Config &cfg, const std::map<std::string, std::string> &keyboard,
+// Applies [keyboard] and [gamepad] (Vita button -> up to two keys / up to two gamepad buttons or
+// triggers) to the config and the controller's extra gamepad bindings; lines that can't be used are
+// added to `warnings`. An empty value unbinds the Vita button; a line left out keeps the binding it has.
+void apply_bindings(EmuEnvState &emuenv, const std::map<std::string, std::string> &keyboard,
     const std::map<std::string, std::string> &gamepad, std::vector<std::string> &warnings);
 
 // an SDL scancode as a physical key code (both are USB HID keyboard usages)
@@ -210,8 +210,8 @@ private:
     struct Binding {
         float x = 0, y = 0;
         std::vector<input::PhysicalKeyCode> keys;
-        int gamepad_button = -1; // SDL_GamepadButton
-        int gamepad_axis = -1; // SDL_GamepadAxis (a trigger)
+        // up to two in all: SDL_GamepadButton, SDL_GamepadAxis (a trigger)
+        std::vector<int> gamepad_buttons, gamepad_axes;
         Target target; // when set, it gives the point instead of x, y
     };
     std::vector<Binding> bindings;

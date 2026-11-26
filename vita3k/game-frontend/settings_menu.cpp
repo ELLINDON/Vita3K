@@ -57,9 +57,10 @@ constexpr color4f SELECTED{ 0.55f, 0.10f, 0.10f, 0.85f };
 constexpr color4f PANEL{ 0.07f, 0.07f, 0.08f, 0.94f };
 constexpr color4f CLEAR{ 0.f, 0.f, 0.f, 0.f };
 
-// the Controls page's columns: the key, the second key, the gamepad button
-constexpr int16_t CELL_X = PANEL_X + 254, CELL_W = 146, CELL_GAP = 8;
-// Android shows the gamepad's column only (no keyboard there to speak of)
+// the Controls page's columns: the key, the second key, the gamepad button, the second gamepad button
+constexpr int16_t CELL_X = PANEL_X + 250, CELL_W = 112, CELL_GAP = 6;
+constexpr size_t PAD_COLUMN = 2, COLUMNS = 4;
+// Android shows the gamepad's columns only (no keyboard there to speak of)
 #ifdef __ANDROID__
 constexpr size_t FIRST_COLUMN = 2;
 #else
@@ -99,19 +100,31 @@ std::vector<std::string> binding_keys(const std::string &list, const std::string
     return keys;
 }
 
-// a gamepad button as the Controls page holds it ([gamepad]'s name, south ... north for the face
-// buttons; a trigger for a touch); empty for none, `fallback` for one that can't be used
-std::string binding_gamepad(const std::string &list, const std::string &fallback, bool triggers) {
+// a gamepad list as the Controls page holds it: up to two, [gamepad]'s names (south ... north for the
+// face buttons, lefttrigger, righttrigger); a list with none usable gives `fallback` (as apply_bindings
+// keeps the binding for it)
+std::vector<std::string> binding_gamepads(const std::string &list, const std::string &fallback) {
+    std::vector<std::string> pads;
     const auto items = split_bindings(list);
-    if (items.empty())
-        return {};
-    const std::string first = string_utils::tolower(items[0]);
-    if (triggers && is_trigger(first))
-        return first;
-    const int button = gamepad_button_from_name(first);
-    if (button < 0)
-        return list == fallback ? std::string() : binding_gamepad(fallback, fallback, triggers);
-    return gamepad_button_name(button);
+    for (const auto &item : items) {
+        std::string name = string_utils::tolower(item);
+        if (!is_trigger(name)) {
+            const int button = gamepad_button_from_name(name);
+            name = button >= 0 ? gamepad_button_name(button) : std::string();
+        }
+        if (!name.empty() && pads.size() < 2 && std::find(pads.begin(), pads.end(), name) == pads.end())
+            pads.push_back(name);
+    }
+    if (pads.empty() && !items.empty() && list != fallback)
+        return binding_gamepads(fallback, fallback);
+    return pads;
+}
+
+std::string join_gamepad_names(const std::vector<std::string> &pads) {
+    std::string out;
+    for (const auto &pad : pads)
+        out += (out.empty() ? "" : ", ") + gamepad_display_name(pad);
+    return out;
 }
 
 std::string join_keys(const std::vector<std::string> &keys) {
@@ -233,14 +246,14 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
                 row.keys = k != keyboard.end() ? binding_keys(k->second, b.keys) : row.default_keys;
                 row.fixed_gamepad = b.fixed_gamepad;
                 if (row.fixed_gamepad.empty()) {
-                    row.default_gamepad = binding_gamepad(b.gamepad, b.gamepad, false);
+                    row.default_gamepads = binding_gamepads(b.gamepad, b.gamepad);
                     const auto g = gamepad.find(b.name);
-                    row.gamepad = g != gamepad.end() ? binding_gamepad(g->second, b.gamepad, false) : row.default_gamepad;
+                    row.gamepads = g != gamepad.end() ? binding_gamepads(g->second, b.gamepad) : row.default_gamepads;
                 }
                 const std::string name = row.name;
                 if (name == "l2" || name == "r2")
                     row.spec.help = "A PS TV's " + string_utils::toupper(name) + ": only with PS TV controls (the Game page). On a gamepad: "
-                        + row.fixed_gamepad + ".";
+                        + row.fixed_gamepad + " (always; a Vita button can take it as well).";
                 else if (!row.fixed_gamepad.empty())
                     row.spec.help = "On a gamepad: the " + string_utils::tolower(row.fixed_gamepad) + ".";
                 rows.push_back(std::move(row));
@@ -257,11 +270,11 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
                                                                                : row_title(touch.name) + " (touch)";
                 // a touch the game doesn't have by default resets to what it is
                 row.default_keys = binding_keys(def != default_touches.end() ? def->keys : touch.keys, def != default_touches.end() ? def->keys : touch.keys);
-                row.default_gamepad = binding_gamepad(def != default_touches.end() ? def->gamepad : touch.gamepad,
-                    def != default_touches.end() ? def->gamepad : touch.gamepad, true);
+                const std::string default_pads = def != default_touches.end() ? def->gamepad : touch.gamepad;
+                row.default_gamepads = binding_gamepads(default_pads, default_pads);
                 row.keys = binding_keys(touch.keys, def != default_touches.end() ? def->keys : touch.keys);
-                row.gamepad = binding_gamepad(touch.gamepad, row.default_gamepad, true);
-                row.spec.help = "Holds a finger on the screen for as long as it is held. The gamepad takes LT or RT here too.";
+                row.gamepads = binding_gamepads(touch.gamepad, default_pads);
+                row.spec.help = "Holds a finger on the screen for as long as it is held.";
                 rows.push_back(std::move(row));
             }
             Row reset;
@@ -576,15 +589,17 @@ void SettingsMenu::set_keys(Row &row, std::vector<std::string> keys) {
         m_changes.push_back({ "touch", row.name + "_key", join_keys(keys) });
 }
 
-void SettingsMenu::set_gamepad(Row &row, const std::string &gamepad) {
-    if (gamepad == row.gamepad || !row.fixed_gamepad.empty())
+void SettingsMenu::set_gamepads(Row &row, std::vector<std::string> gamepads) {
+    if (gamepads.size() > 2)
+        gamepads.resize(2);
+    if (gamepads == row.gamepads || !row.fixed_gamepad.empty())
         return;
-    row.gamepad = gamepad;
+    row.gamepads = gamepads;
     m_ignore_until = std::max(m_ignore_until, std::chrono::steady_clock::now() + AFTER_LISTEN);
     if (row.binding == Binding::Button)
-        m_changes.push_back({ "gamepad", row.name, gamepad });
+        m_changes.push_back({ "gamepad", row.name, join_keys(gamepads) });
     else
-        m_changes.push_back({ "touch", row.name + "_gamepad", gamepad });
+        m_changes.push_back({ "touch", row.name + "_gamepad", join_keys(gamepads) });
 }
 
 // A key into one of a row's two key cells. A key another binding has changes places with this cell's
@@ -626,28 +641,53 @@ void SettingsMenu::assign_key(Row &row, size_t column, const std::string &key) {
     set_keys(row, keys);
 }
 
-// A gamepad button into a row's gamepad cell; one another binding has changes places with this one's
-// old button (a trigger, which only a touch takes, leaves a Vita button without one)
-void SettingsMenu::assign_gamepad(Row &row, const std::string &gamepad) {
-    if (gamepad == row.gamepad || !row.fixed_gamepad.empty())
+// A gamepad button or trigger into one of a row's two gamepad cells (slot 0, 1), as assign_key does it
+// for keys: one another binding has changes places with this cell's old one
+void SettingsMenu::assign_gamepad(Row &row, size_t slot, const std::string &gamepad) {
+    if (!row.fixed_gamepad.empty())
         return;
-    const std::string old = row.gamepad;
-    for (Row *other : binding_rows()) {
-        if (other == &row || !other->fixed_gamepad.empty() || other->gamepad != gamepad)
+    std::vector<std::string> pads = row.gamepads;
+    for (size_t i = 0; i < pads.size(); i++) {
+        if (pads[i] != gamepad)
             continue;
-        const std::string give = other->binding == Binding::Button && is_trigger(old) ? std::string() : old;
-        set_gamepad(*other, give);
-        m_note = give.empty() ? fmt::format("{} was on {}: no longer there.", gamepad_display_name(gamepad), other->spec.title)
-                              : fmt::format("{} was on {}: {} is there now.", gamepad_display_name(gamepad), other->spec.title,
-                                    gamepad_display_name(give));
+        // the row's other one: the two change places
+        if (slot < pads.size() && i != slot)
+            std::swap(pads[i], pads[slot]);
+        set_gamepads(row, pads);
+        return;
     }
-    set_gamepad(row, gamepad);
+    const std::string old = slot < pads.size() ? pads[slot] : std::string();
+    for (Row *other : binding_rows()) {
+        if (other == &row || !other->fixed_gamepad.empty())
+            continue;
+        std::vector<std::string> other_pads = other->gamepads;
+        const auto it = std::find(other_pads.begin(), other_pads.end(), gamepad);
+        if (it == other_pads.end())
+            continue;
+        const bool has_old = !old.empty() && std::find(other_pads.begin(), other_pads.end(), old) != other_pads.end();
+        if (old.empty() || has_old)
+            other_pads.erase(it);
+        else
+            *it = old;
+        set_gamepads(*other, other_pads);
+        m_note = old.empty() || has_old ? fmt::format("{} was on {}: no longer there.", gamepad_display_name(gamepad), other->spec.title)
+                                        : fmt::format("{} was on {}: {} is there now.", gamepad_display_name(gamepad), other->spec.title,
+                                              gamepad_display_name(old));
+    }
+    if (slot < pads.size())
+        pads[slot] = gamepad;
+    else
+        pads.push_back(gamepad);
+    set_gamepads(row, pads);
+    // the triggers press a PS TV's L2 and R2 whatever else they are (ctrl.cpp, apply_controller)
+    if (is_trigger(gamepad) && m_note.empty())
+        m_note = fmt::format("{} stays a PS TV's {} as well.", gamepad_display_name(gamepad), gamepad == "lefttrigger" ? "L2" : "R2");
 }
 
 void SettingsMenu::reset_bindings() {
     for (Row *row : binding_rows()) {
         set_keys(*row, row->default_keys);
-        set_gamepad(*row, row->default_gamepad);
+        set_gamepads(*row, row->default_gamepads);
     }
     m_note = "Every control is back to its default.";
 }
@@ -677,12 +717,12 @@ void SettingsMenu::binding_button(Row &row, pad_button button) {
         break;
     case pad_button::dpad_right:
     case pad_button::ls_right:
-        if (m_column < 2)
+        if (m_column + 1 < COLUMNS)
             m_column++;
         break;
     case pad_button::cross:
     case pad_button::start:
-        if (m_column == 2 && !row.fixed_gamepad.empty()) {
+        if (m_column >= PAD_COLUMN && !row.fixed_gamepad.empty()) {
             m_note = "The gamepad's sticks and triggers can't be changed.";
             break;
         }
@@ -691,13 +731,17 @@ void SettingsMenu::binding_button(Row &row, pad_button button) {
         m_listening.store(true);
         break;
     case pad_button::square:
-        if (m_column < 2) {
+        if (m_column < PAD_COLUMN) {
             std::vector<std::string> keys = row.keys;
             if (m_column < keys.size())
                 keys.erase(keys.begin() + static_cast<std::ptrdiff_t>(m_column));
             set_keys(row, keys);
-        } else
-            set_gamepad(row, "");
+        } else {
+            std::vector<std::string> pads = row.gamepads;
+            if (m_column - PAD_COLUMN < pads.size())
+                pads.erase(pads.begin() + static_cast<std::ptrdiff_t>(m_column - PAD_COLUMN));
+            set_gamepads(row, pads);
+        }
         break;
     case pad_button::triangle: {
         m_note.clear();
@@ -710,10 +754,15 @@ void SettingsMenu::binding_button(Row &row, pad_button button) {
             else if (row.keys.size() > 1)
                 set_keys(row, { row.keys[0] });
         }
-        if (row.default_gamepad.empty())
-            set_gamepad(row, "");
-        else
-            assign_gamepad(row, row.default_gamepad);
+        if (row.default_gamepads.empty())
+            set_gamepads(row, {});
+        else {
+            assign_gamepad(row, 0, row.default_gamepads[0]);
+            if (row.default_gamepads.size() > 1)
+                assign_gamepad(row, 1, row.default_gamepads[1]);
+            else if (row.gamepads.size() > 1)
+                set_gamepads(row, { row.gamepads[0] });
+        }
         break;
     }
     default:
@@ -730,7 +779,7 @@ void SettingsMenu::bind_key(int scancode) {
             return;
         const auto code = key_from_scancode(scancode);
         const std::string w3c(input::physical_key_code_name(code));
-        if (w3c == "Escape" || m_column == 2)
+        if (w3c == "Escape" || m_column >= PAD_COLUMN)
             end_listen(); // cancelled (a key while a gamepad button is awaited too)
         else if (w3c.empty() || w3c == "F11" || w3c == "F12")
             return; // the front end's own keys (F1 closes the menu before it gets here): waiting on
@@ -747,7 +796,7 @@ void SettingsMenu::bind_mouse(int sdl_button) {
         std::lock_guard<std::mutex> lock(m_mutex);
         listen_timeout();
         Row *row = selected_row();
-        if (!m_listening.load() || !listen_ready() || !row || row->binding == Binding::None || m_column == 2)
+        if (!m_listening.load() || !listen_ready() || !row || row->binding == Binding::None || m_column >= PAD_COLUMN)
             return;
         // the middle button captures the cursor: no binding
         if (sdl_button != SDL_BUTTON_LEFT && sdl_button != SDL_BUTTON_RIGHT && sdl_button != SDL_BUTTON_X1 && sdl_button != SDL_BUTTON_X2)
@@ -768,8 +817,8 @@ void SettingsMenu::bind_gamepad_button(int sdl_button) {
         if (!m_listening.load() || !listen_ready() || !row || row->binding == Binding::None)
             return;
         end_listen();
-        if (m_column == 2) // on a key cell, a gamepad button cancels
-            assign_gamepad(*row, gamepad_button_name(sdl_button));
+        if (m_column >= PAD_COLUMN) // on a key cell, a gamepad button cancels
+            assign_gamepad(*row, m_column - PAD_COLUMN, gamepad_button_name(sdl_button));
     }
     refresh();
 }
@@ -781,13 +830,9 @@ void SettingsMenu::bind_gamepad_trigger(int sdl_axis) {
         Row *row = selected_row();
         if (!m_listening.load() || !listen_ready() || !row || row->binding == Binding::None)
             return;
-        if (m_column != 2) {
-            end_listen();
-        } else if (row->binding == Binding::Touch) {
-            end_listen();
-            assign_gamepad(*row, sdl_axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? "lefttrigger" : "righttrigger");
-        } else
-            m_note = "LT and RT are a PS TV's L2 and R2: only a touch takes them here."; // waiting on
+        end_listen();
+        if (m_column >= PAD_COLUMN) // on a key cell, a trigger cancels
+            assign_gamepad(*row, m_column - PAD_COLUMN, sdl_axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? "lefttrigger" : "righttrigger");
     }
     refresh();
 }
@@ -947,32 +992,34 @@ done:
             if (row.header) {
                 // the Controls page's column names
                 result.add(text("Vita button", PANEL_X + 34, y + 12, 200, 20, 13, TEXT_DIM).get_compiled());
-                static const char *const names[] = { "Key", "Second key", "Gamepad" };
-                for (size_t c = FIRST_COLUMN; c < 3; c++)
+                static const char *const names[] = { "Key", "Second key", "Gamepad", "Second button" };
+                for (size_t c = FIRST_COLUMN; c < COLUMNS; c++)
                     result.add(text(names[c], cell_x(c), y + 12, CELL_W, 20, 13, TEXT_DIM, overlay_element::center).get_compiled());
                 continue;
             }
             if (selected)
                 result.add(rect(PANEL_X + 16, y, PANEL_W - 32, ROW_H - 4, SELECTED, 6).get_compiled());
             if (row.binding != Binding::None) {
-                // a binding: its name, its two keys and its gamepad button, the selected one framed
-                result.add(text(row.spec.title, PANEL_X + 34, y + 6, 214, 24, 16, TEXT).get_compiled());
-                for (size_t c = FIRST_COLUMN; c < 3; c++) {
+                // a binding: its name, its two keys and its two gamepad buttons, the selected one framed
+                result.add(text(row.spec.title, PANEL_X + 34, y + 6, 210, 24, 16, TEXT).get_compiled());
+                for (size_t c = FIRST_COLUMN; c < COLUMNS; c++) {
                     const bool cell_selected = selected && c == m_column;
                     const bool waiting = cell_selected && listening;
                     std::string value;
                     bool dim = false;
                     if (waiting)
-                        value = c < 2 ? "Press a key" : "Press it";
-                    else if (c < 2) {
+                        value = c < PAD_COLUMN ? "Press a key" : "Press it";
+                    else if (c < PAD_COLUMN) {
                         dim = c >= row.keys.size();
                         value = dim ? "-" : row.keys[c];
                     } else if (!row.fixed_gamepad.empty()) {
-                        value = row.fixed_gamepad;
+                        // a stick or a trigger, in the first gamepad cell
+                        value = c == PAD_COLUMN ? row.fixed_gamepad : std::string();
                         dim = true;
                     } else {
-                        dim = row.gamepad.empty();
-                        value = dim ? "-" : gamepad_display_name(row.gamepad);
+                        const size_t slot = c - PAD_COLUMN;
+                        dim = slot >= row.gamepads.size();
+                        value = dim ? "-" : gamepad_display_name(row.gamepads[slot]);
                     }
                     if (cell_selected)
                         result.add(rect(cell_x(c), y + 2, CELL_W, ROW_H - 8, waiting ? ACCENT : color4f{ 0.85f, 0.30f, 0.30f, 0.45f }, 5).get_compiled());
@@ -1037,22 +1084,22 @@ done:
         help = row.spec.help;
         std::replace(help.begin(), help.end(), '\n', ' ');
         if (row.binding != Binding::None && listening) {
-            if (m_column < 2)
+            if (m_column < PAD_COLUMN)
                 help = "Press the new key, or a mouse button: a side button, or the left or right button (those press it only "
                        "while the mouse camera has the cursor). Esc or a gamepad button: cancel.";
             else
-                help = std::string(row.binding == Binding::Touch ? "Press the new gamepad button, or LT or RT." : "Press the new gamepad button.")
-                    + " " CANCEL_KEY ": cancel.";
+                help = "Press the new gamepad button, or LT or RT. " CANCEL_KEY ": cancel.";
         } else if (row.binding != Binding::None) {
 #ifdef __ANDROID__
-            const std::string defaults = row.default_gamepad.empty() ? "none" : gamepad_display_name(row.default_gamepad);
-            help += (help.empty() ? "" : " ") + fmt::format("Cross: change it, then press the new button. Square: clear it. Triangle: its default ({}). "
+            const std::string defaults = row.default_gamepads.empty() ? "none" : join_gamepad_names(row.default_gamepads);
+            help += (help.empty() ? "" : " ") + fmt::format("Left/Right: the first or second button. Cross: change it, then press the new button "
+                                                            "(LT and RT too). Square: clear it. Triangle: its defaults ({}). "
                                                             "A button another control has changes places with it.",
                                                     defaults);
 #else
             std::string defaults = join_keys(row.default_keys);
-            if (row.fixed_gamepad.empty() && !row.default_gamepad.empty())
-                defaults += (defaults.empty() ? "" : ", ") + gamepad_display_name(row.default_gamepad);
+            if (row.fixed_gamepad.empty() && !row.default_gamepads.empty())
+                defaults += (defaults.empty() ? "" : ", ") + join_gamepad_names(row.default_gamepads);
             help += (help.empty() ? "" : " ") + fmt::format("Cross: change the selected one, then press the new key or button. Square: clear it. "
                                                             "Triangle: this control's defaults ({}). A key or button another control has changes places with it.",
                                                     defaults.empty() ? "none" : defaults);
@@ -1090,7 +1137,7 @@ done:
     // the controls: a gamepad's, and on a PC the keyboard's too (as the Controls page binds them)
     const bool on_binding = page && m_row < page->rows.size() && page->rows[m_row].binding != Binding::None;
 #ifdef __ANDROID__
-    const std::string menu_hints = on_binding ? "Up/Down: choose    Cross: change    Square: clear    Triangle: default    L1/R1: page    Circle: close"
+    const std::string menu_hints = on_binding ? "Left/Right: column    Cross: change    Square: clear    Triangle: default    L1/R1: page    Circle: close"
                                               : "Up/Down: choose    Left/Right, Cross: change    L1/R1: page    Circle: close";
 #else
     const std::string menu_hints = on_binding
@@ -1101,7 +1148,7 @@ done:
 #endif
     const std::string hints = m_text_editing.load()
         ? "Type, or Up/Down: character    Left/Right: move    Square: delete    Cross, Enter: done    Circle, Esc: cancel"
-        : on_binding && listening ? std::string(m_column < 2 ? "Press the new key or mouse button    Esc: cancel" : "Press the new gamepad button    " CANCEL_KEY ": cancel")
+        : on_binding && listening ? std::string(m_column < PAD_COLUMN ? "Press the new key or mouse button    Esc: cancel" : "Press the new gamepad button, LT or RT    " CANCEL_KEY ": cancel")
                                   : menu_hints;
     result.add(text(hints, PANEL_X + 24, FOOTER_Y, PANEL_W - 48, 20, 12, TEXT_DIM, overlay_element::center).get_compiled());
     return result;

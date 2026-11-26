@@ -28,6 +28,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -57,6 +58,15 @@ struct SDL_GUIDComparator {
 
 typedef std::map<SDL_GUID, Controller, SDL_GUIDComparator> ControllerList;
 
+// A gamepad input beyond Vita3K's one button per Vita button (Config::controller_binds): a front end's
+// second button for a Vita button, or a trigger (which presses L2/R2 as well)
+struct ExtraGamepadBinding {
+    int button = -1; // an SDL_GamepadButton, or -1
+    int axis = -1; // an SDL_GamepadAxis (a trigger), or -1
+    uint32_t vita_button = 0; // the Vita button in the basic functions
+    uint32_t vita_button_ext = 0; // the same in the extended ones (L1/R1 for L/R)
+};
+
 struct VirtualKeyboardState {
     uint32_t buttons = 0;
     uint32_t buttons_ext = 0;
@@ -70,6 +80,8 @@ struct CtrlState {
     // ss-delta: n > 0 opens only the nth connected gamepad (one copy of the game per player)
     int only_gamepad = 0;
     float analog_multiplier = 1.0f;
+    // ss-delta: gamepad inputs a front end adds to controller_binds (under `mutex`)
+    std::vector<ExtraGamepadBinding> extra_gamepad_binds;
     bool has_motion_support = false;
     bool free_ports[SCE_CTRL_MAX_WIRELESS_NUM] = { true, true, true, true };
     SceCtrlPadInputMode input_mode = SCE_CTRL_MODE_DIGITAL;
@@ -106,6 +118,9 @@ struct CtrlState {
     std::vector<std::pair<int, std::string>> injected_records;
     // front-touch fingers the test driver holds, in 960x544 screen points (the frontend applies them)
     std::vector<std::pair<float, float>> injected_touches;
+    // the gamepad inputs the test driver holds now (SDL's names: south, dpup, righttrigger ...), set
+    // until the frontend takes them onto a virtual gamepad of its own
+    std::optional<std::vector<std::string>> injected_gamepad;
 
     std::atomic<bool> overlay_input_intercepted{ false };
 

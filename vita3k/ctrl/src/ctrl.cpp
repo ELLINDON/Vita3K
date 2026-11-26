@@ -166,6 +166,8 @@ void refresh_controllers(CtrlState &state, EmuEnvState &emuenv) {
 //   textsubmit                    the frontend presses Enter on that dialog
 //   mouse <dx> <dy>               relative mouse motion (mouse counts), as if the frontend's captured
 //                                 mouse moved (its mouse camera turns it into the right stick)
+//   gamepad <input> ... | none    the frontend holds exactly these on a virtual gamepad of SDL's (SDL's
+//                                 names: south, dpup, leftshoulder, lefttrigger ...), as a real one
 // Buttons: cross circle square triangle up down left right l r l2 r2 l3 r3 start select.
 // Nothing goes through the window, so automated runs never need keyboard focus.
 static uint32_t parse_injected_button(const std::string &name) {
@@ -265,6 +267,13 @@ static void apply_injected_command(CtrlState &state, const std::string &line) {
         std::getline(words >> std::ws, name);
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_keys.push_back(std::move(name));
+    } else if (command == "gamepad") {
+        std::vector<std::string> names;
+        for (std::string name; words >> name;)
+            if (name != "none")
+                names.push_back(name);
+        std::lock_guard<std::mutex> guard(state.mutex);
+        state.injected_gamepad = std::move(names);
     } else if (command == "textsubmit") {
         std::lock_guard<std::mutex> guard(state.mutex);
         state.injected_text_submit = true;
@@ -461,6 +470,13 @@ static void apply_controller(EmuEnvState &emuenv, uint32_t *buttons, float axes[
                 *buttons |= binding.button;
             }
         }
+    }
+    // a front end's second inputs (a second button, a trigger) for Vita buttons; the caller holds the mutex
+    for (const auto &extra : emuenv.ctrl.extra_gamepad_binds) {
+        const bool down = (extra.button >= 0 && SDL_GetGamepadButton(controller, static_cast<SDL_GamepadButton>(extra.button)))
+            || (extra.axis >= 0 && SDL_GetGamepadAxis(controller, static_cast<SDL_GamepadAxis>(extra.axis)) > 0x3FFF);
+        if (down)
+            *buttons |= ext ? extra.vita_button_ext : extra.vita_button;
     }
 
     auto &analog_multiplier = emuenv.cfg.controller_analog_multiplier;

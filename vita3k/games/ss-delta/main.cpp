@@ -242,6 +242,10 @@ game_frontend::IniLayout ini_layout() {
             { "one_hit_kills", Kind::Bool, "false", 0, 0, {},
                 "In quests, your attacks defeat ordinary enemies in one hit. Bosses take five: the game\n"
                 "limits a hit on a boss to a fifth of its health." },
+            { "invincible", Kind::Bool, "false", 0, 0, {},
+                "Enemies' attacks neither hurt you nor knock you down: hits pass without a stagger, so you\n"
+                "keep control. Attacks that cost health cost none either. The game's own debug switch\n"
+                "(NoDamage); switched off, hits count again at once." },
             { "max_lacrima", Kind::Bool, "false", 0, 0, {}, "Keep Lacrima at 9,999,999." },
             { "max_levels", Kind::Bool, "false", 0, 0, {},
                 "Raise the Life and Magic levels to 99, the highest. Not yet early in the story (the\n"
@@ -252,8 +256,9 @@ game_frontend::IniLayout ini_layout() {
     cheats.settings[1].title = "Unlimited offerings";
     cheats.settings[2].title = "Lasting offerings";
     cheats.settings[3].title = "One-hit kills";
-    cheats.settings[4].title = "Max Lacrima";
-    cheats.settings[5].title = "Max levels";
+    cheats.settings[4].title = "Invincible";
+    cheats.settings[5].title = "Max Lacrima";
+    cheats.settings[6].title = "Max levels";
     // Windows starts with local, so a first start doesn't raise a firewall prompt; a Steam Deck or a Mac is
     // rarely used for several copies on one machine, and with local its rooms never reached the network
 #ifdef _WIN32
@@ -528,6 +533,7 @@ struct CheatState {
     int apply_wait = 0; // ticks until the tables are gone over again (once a second)
     Address lasting_text = 0; // "9999" in guest memory, for the buffs' durations (kept for the session)
     std::map<Address, uint32_t> saved_durations; // durations as the game had them, while changed
+    bool no_damage_set = false; // the debug menu's NoDamage switch is on through the cheat
 };
 
 constexpr float LASTING_SECONDS = 9999.0f; // longer than any quest (the game's own limit is 60 minutes)
@@ -754,6 +760,42 @@ void apply_cheats(EmuEnvState &emuenv, const game_frontend::Values &values, Chea
     const bool offerings = values.get_bool("cheats.infinite_offerings");
     const bool one_hit = values.get_bool("cheats.one_hit_kills");
     apply_offering_durations(emuenv, values.get_bool("cheats.long_offerings"), state);
+
+    // Invincible: the game keeps its developers' debug menu, a block at *0x81c9a488 built at boot.
+    // Its Player group (from +0x68) has NoDamage at +0x8d, which the player's hit handler
+    // (0x81377452, through 0x817e78fa) checks: a hit then neither takes health nor plays the hit
+    // reaction (stagger, knock-down), and attacks that cost health cost none. Retail code never sets
+    // it, so the cheat sets it while on and clears it once when switched off.
+    const bool invincible = values.get_bool("cheats.invincible");
+    if (invincible || state.no_damage_set) {
+        constexpr Address DEBUG_HOLDER = 0x81c9a488;
+        const uint32_t *const holder = u32(DEBUG_HOLDER);
+        const Address block = holder ? *holder : 0;
+        // the block's own defaults, so a wrong pointer is not written through: the Player group's
+        // TurnLimit[Normal] (360.0 at +0x70) and MotionSpeed (1.0 at +0x88); the switch is a bool
+        const bool valid = block && is_valid_addr_range(mem, block, block + 0x100) && float_at(mem, block + 0x70) == 360.0f
+            && float_at(mem, block + 0x88) == 1.0f && Ptr<uint8_t>(block + 0x8d).get(mem)[0] <= 1;
+        if (!valid) {
+            // 0 early in the boot, before the game builds the block
+            if (invincible && block && state.logged.insert(fmt::format("no debug block {:#x}", block)).second)
+                LOG_WARN("cheats: invincible: the game's debug block isn't where expected ({:#x}); left alone", block);
+        } else {
+            uint8_t *const no_damage = Ptr<uint8_t>(block + 0x8d).get(mem);
+            if (invincible) {
+                if (*no_damage != 1) {
+                    *no_damage = 1;
+                    once("invincible", block);
+                }
+                state.no_damage_set = true;
+            } else {
+                *no_damage = 0;
+                state.no_damage_set = false;
+                state.logged.erase(fmt::format("invincible {:#x}", block));
+                LOG_INFO("cheats: invincible off ({:#x})", block);
+            }
+        }
+    }
+
     if (health || offerings || one_hit) {
         const uint32_t *const quest_holder = u32(QUEST_HOLDER);
         const uint32_t *const quest = quest_holder && *quest_holder ? u32(*quest_holder) : nullptr;

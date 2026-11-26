@@ -71,10 +71,16 @@ int ThreadState::init(const char *name, Ptr<const void> entry_point, int init_pr
             throw AotUnwind{};
     };
     // Recompiled code calls imports itself, without returning to run_loop().
+    // Waits out a pause only: an exit is left to the callers (aot_call_import, aot_run_until_sentinel),
+    // which throw AotUnwind once they have restored halted and the exclusive monitor. Thrown from here,
+    // an import that ran a guest callback could leave halted set, and run_loop would then replace the
+    // thread's exit status with r0.
     cpu->import_handler = [this](CPUState &cpu_state, uint32_t nid) {
-        cpu_state.execution_gate();
+        const auto exiting = [&] { return cpu_state.aot_unwind.load(std::memory_order_acquire); };
+        if (!kernel.session_pause.wait(exiting))
+            return;
         kernel.call_import(cpu_state, nid, id);
-        cpu_state.execution_gate();
+        kernel.session_pause.wait(exiting);
     };
     // Ad hoc matching over a network instead of a Vita's direct link: games set the retransmit
     // interval of sceNetAdhocMatchingCreate (argument 8, on the stack at sp + 12) for the Vita's few

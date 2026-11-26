@@ -77,20 +77,33 @@ public class BuildActivity extends Activity {
     private static final String KEY_STEP = "step", KEY_PARTS = "parts", KEY_ADDON = "addon";
     static final String EXTRA_ADD_ADDON = "add_addon";
     private static final int REQUEST_PICK_PART = 1, REQUEST_PICK_LICENSE = 2, REQUEST_STEP = 3,
-        REQUEST_PICK_ADDON = 4, REQUEST_PICK_ADDON_LICENSE = 5;
+        REQUEST_PICK_ADDON = 4, REQUEST_PICK_ADDON_LICENSE = 5, REQUEST_PICK_FIRMWARE = 6;
+
+    /**
+     * Firmware 3.74 as the kit's fetch-firmware.py pins it: name, size, SHA-256. A PUP the player has is
+     * known by its content, whatever its name, and copied into the firmware step's folder under that
+     * name; the step then takes it instead of downloading it (fetch-firmware.py keeps a file that has the
+     * right size and hash). The one not given still comes from Sony.
+     */
+    private static final String[][] FIRMWARE_FILES = {
+        { "PSVUPDAT.PUP", "133834240", "6ef6dc8da6db026f28647713e473486d770087a605c52a8d751bfca7478386cf" },
+        { "PSP2UPDAT.PUP", "56768512", "f372d306a7f2711125bea29aa75cbcb1eb19724e9648478fba07b8d655b37344" },
+    };
 
     private static final int PICK = 0, FIRMWARE = 1, INSTALL_FIRMWARE = 2, INSTALL_GAME = 3, CHECK = 4, DUMP = 5, BUILD = 6,
         INSTALL_ADDON = 7;
-    private static final String[] STEP_NAMES = { "", "Downloading the firmware", "Installing the firmware",
+    private static final String[] STEP_NAMES = { "", "Getting the firmware", "Installing the firmware",
         "Installing the game", "Checking the game's version", "Running the game to find its code", "Building the native code",
         "Installing the add-on" };
 
     static volatile boolean visible = false;
 
     private final Handler main = new Handler(Looper.getMainLooper());
-    private TextView partsView, stepView, errorView, logView;
+    private TextView partsView, firmwareView, stepView, errorView, logView;
     private final List<View> formViews = new ArrayList<>(); // the intro and the file picking: hidden while setting up
-    private Button addButton, licenseButton, clearButton, buildButton, retryButton, playButton, startOverButton, addonButton;
+    private Button addButton, licenseButton, clearButton, firmwareButton, buildButton, retryButton, playButton, startOverButton, addonButton;
+    private volatile String importing; // the firmware file being read and checked (null: none)
+    private String firmwareReport = ""; // what the last firmware files picked turned out to be
     private ScrollView logScroll;
     private int step;
     private JSONArray parts;
@@ -190,7 +203,8 @@ public class BuildActivity extends Activity {
               + "game's last update after it if the dump lacks it (its .pkg), and add-ons (DLC) the same way, or a "
               + "rePatch mod (a .zip with its rePatch folder); add-ons and mods can also be added later, from the "
               + "app icon's long-press menu. The PS Vita firmware comes from Sony's "
-              + "servers (190 MB).\n\n"
+              + "servers (190 MB), or from its files if you have them (version 3.74's PSVUPDAT.PUP and PSP2UPDAT.PUP: "
+              + "Add firmware files).\n\n"
               + "Building takes about " + buildMinutes() + " minutes on a fast device and needs about 10 GB of free space (5 GB of it "
               + "only while building). Keep the device charging. Nothing leaves the device.", 15, false);
         intro.setPadding(0, dp(8), 0, dp(12));
@@ -215,6 +229,16 @@ public class BuildActivity extends Activity {
         partsView = text("", 15, false);
         partsView.setPadding(0, dp(8), 0, dp(8));
         column.addView(partsView);
+
+        LinearLayout firmwareRow = new LinearLayout(this);
+        firmwareRow.setOrientation(LinearLayout.HORIZONTAL);
+        firmwareRow.setGravity(Gravity.CENTER_VERTICAL);
+        firmwareButton = button("Add firmware files…", v -> pickFirmware());
+        firmwareView = text("", 15, false);
+        firmwareRow.addView(firmwareButton);
+        firmwareRow.addView(firmwareView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        column.addView(firmwareRow);
+        formViews.add(firmwareRow);
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -354,10 +378,13 @@ public class BuildActivity extends Activity {
         else
             partsView.setText(parts.length() == 0 ? "No files chosen yet." : (busy ? "From:\n" : "") + list.toString().trim());
         boolean lastIsPkg = parts.length() > 0 && parts.optJSONObject(parts.length() - 1).optString("name").toLowerCase().endsWith(".pkg");
-        addButton.setEnabled(!busy);
-        licenseButton.setEnabled(!busy && lastIsPkg);
-        clearButton.setEnabled(!busy && parts.length() > 0);
-        buildButton.setEnabled(!busy && (parts.length() > 0 || rebuild));
+        boolean idle = !busy && importing == null; // (not while a firmware file is being checked)
+        addButton.setEnabled(idle);
+        licenseButton.setEnabled(idle && lastIsPkg);
+        clearButton.setEnabled(idle && parts.length() > 0);
+        firmwareButton.setEnabled(idle);
+        buildButton.setEnabled(idle && (parts.length() > 0 || rebuild));
+        firmwareView.setText(firmwareStatus());
         // built: Play (or Build, to build again); setting up: the progress, and the files it uses (none
         // for a rebuild after an update)
         boolean built = !busy && !needsSetup(this);
@@ -410,6 +437,116 @@ public class BuildActivity extends Activity {
         run();
     }
 
+    // --- the firmware from the player's own files -----------------------------------------------
+
+    private File firmwareDir() {
+        return new File(work(), "firmware");
+    }
+
+    /** Which PUPs are here already (put there by a pick, or left by an earlier download), and the last report. */
+    private String firmwareStatus() {
+        if (importing != null)
+            return "Checking " + importing + "…";
+        List<String> have = new ArrayList<>(), missing = new ArrayList<>();
+        for (String[] f : FIRMWARE_FILES) {
+            File file = new File(firmwareDir(), f[0]);
+            (file.isFile() && file.length() == Long.parseLong(f[1]) ? have : missing).add(f[0]);
+        }
+        String status = have.isEmpty() ? "The firmware will be downloaded from Sony."
+            : missing.isEmpty() ? "Firmware: " + String.join(" and ", have) + " are here, nothing to download."
+            : "Firmware: " + String.join(", ", have) + " is here; " + String.join(", ", missing) + " will be downloaded from Sony.";
+        return firmwareReport.isEmpty() ? status : firmwareReport + "\n" + status;
+    }
+
+    private void pickFirmware() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // both PUPs at once
+        startActivityForResult(intent, REQUEST_PICK_FIRMWARE);
+    }
+
+    /** The size the picker reports, or -1. */
+    private long documentSize(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, new String[] { OpenableColumns.SIZE }, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0))
+                return c.getLong(0);
+        } catch (Exception e) {
+            Log.w(TAG, "size", e);
+        }
+        return -1;
+    }
+
+    /**
+     * Reads each file picked (through the picker's grant, as the dump is read), hashing it as it is copied,
+     * and keeps it under its firmware name when its size and SHA-256 are one of FIRMWARE_FILES'. On a
+     * thread of its own: 190 MB take a few seconds.
+     */
+    private void importFirmware(List<Uri> uris) {
+        File dir = firmwareDir();
+        new Thread(() -> {
+            List<String> report = new ArrayList<>();
+            for (Uri uri : uris) {
+                String name = displayName(uri);
+                long size = documentSize(uri);
+                boolean known = size < 0;
+                for (String[] f : FIRMWARE_FILES)
+                    known |= size == Long.parseLong(f[1]);
+                if (!known) {
+                    report.add(name + " isn't PSVUPDAT.PUP or PSP2UPDAT.PUP of firmware 3.74 (its size).");
+                    continue;
+                }
+                importing = name;
+                main.post(this::refresh);
+                File part = new File(dir, "picked.part");
+                try {
+                    if (!dir.isDirectory() && !dir.mkdirs())
+                        throw new java.io.IOException("can't create " + dir);
+                    java.security.MessageDigest sha = java.security.MessageDigest.getInstance("SHA-256");
+                    long read = 0;
+                    try (InputStream in = getContentResolver().openInputStream(uri);
+                         java.io.OutputStream out = new java.io.FileOutputStream(part)) {
+                        if (in == null)
+                            throw new java.io.IOException("no data");
+                        byte[] buffer = new byte[1 << 20];
+                        for (int n; (n = in.read(buffer)) > 0;) {
+                            sha.update(buffer, 0, n);
+                            out.write(buffer, 0, n);
+                            read += n;
+                        }
+                    }
+                    StringBuilder digest = new StringBuilder();
+                    for (byte b : sha.digest())
+                        digest.append(String.format("%02x", b));
+                    String match = null;
+                    for (String[] f : FIRMWARE_FILES)
+                        if (read == Long.parseLong(f[1]) && digest.toString().equals(f[2]))
+                            match = f[0];
+                    if (match == null) {
+                        part.delete();
+                        report.add(name + " isn't PSVUPDAT.PUP or PSP2UPDAT.PUP of firmware 3.74 (its SHA-256).");
+                        continue;
+                    }
+                    File dest = new File(dir, match);
+                    dest.delete();
+                    if (!part.renameTo(dest))
+                        throw new java.io.IOException("can't rename it to " + dest);
+                    report.add(name + ": " + match + ", checked.");
+                } catch (Exception e) {
+                    part.delete();
+                    report.add(name + " couldn't be read: " + e.getMessage());
+                    Log.w(TAG, "firmware " + name, e);
+                }
+            }
+            main.post(() -> {
+                importing = null;
+                firmwareReport = String.join("\n", report);
+                refresh();
+                buildButton.requestFocus();
+            });
+        }).start();
+    }
+
     // --- picking the dump ---------------------------------------------------------------------
 
     private void pick(int request) {
@@ -458,6 +595,19 @@ public class BuildActivity extends Activity {
                 }
                 refresh();
             }
+            return;
+        }
+        if (requestCode == REQUEST_PICK_FIRMWARE) {
+            List<Uri> uris = new ArrayList<>();
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getClipData() != null)
+                    for (int i = 0; i < data.getClipData().getItemCount(); i++)
+                        uris.add(data.getClipData().getItemAt(i).getUri());
+                else if (data.getData() != null)
+                    uris.add(data.getData());
+            }
+            if (!uris.isEmpty())
+                importFirmware(uris);
             return;
         }
         boolean picked = resultCode == RESULT_OK && data != null && data.getData() != null;

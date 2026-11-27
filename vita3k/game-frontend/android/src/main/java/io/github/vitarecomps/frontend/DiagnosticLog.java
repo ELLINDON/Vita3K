@@ -35,11 +35,16 @@ final class DiagnosticLog {
         try (RandomAccessFile in = new RandomAccessFile(file, "r")) {
             long end = in.length();
             long start = Math.max(0, end - limit);
+            boolean partial = false;
+            if (start > 0) {
+                in.seek(start - 1);
+                partial = in.read() != '\n';
+            }
             in.seek(start);
             byte[] bytes = new byte[(int) (end - start)];
             in.readFully(bytes);
             String text = new String(bytes, StandardCharsets.UTF_8);
-            if (start > 0) {
+            if (partial) {
                 int newline = text.indexOf('\n');
                 text = newline >= 0 ? text.substring(newline + 1) : "";
             }

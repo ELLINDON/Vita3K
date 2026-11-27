@@ -18,48 +18,74 @@
 package io.github.vitarecomps.frontend;
 
 import android.content.*;
-import android.database.*;
+import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.net.Uri;
-import android.os.*;
+import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 
 import java.io.*;
 
 public class DiagnosticProvider extends ContentProvider {
+    @Override
     public boolean onCreate() {
         return true;
     }
 
-    public String getType(Uri u) {
+    @Override
+    public String getType(Uri uri) {
         return "text/plain";
     }
 
-    public ParcelFileDescriptor openFile(Uri u, String mode) throws FileNotFoundException {
-        if (!"r".equals(mode)
-                || u.getLastPathSegment() == null
-                || !u.getLastPathSegment().startsWith("SSD_"))
+    private File report(Uri uri) throws FileNotFoundException {
+        if (uri.getPathSegments().size() != 1)
+            throw new FileNotFoundException("Invalid report path");
+        try {
+            return DiagnosticStore.resolve(
+                    ImportDiagnostics.reportDirectory(getContext()), uri.getLastPathSegment());
+        } catch (IOException error) {
             throw new FileNotFoundException("Report unavailable");
-        return ParcelFileDescriptor.open(
-                ImportDiagnostics.reportFile(getContext()), ParcelFileDescriptor.MODE_READ_ONLY);
+        }
     }
 
-    public Cursor query(Uri u, String[] p, String sel, String[] args, String sort) {
-        File f = ImportDiagnostics.reportFile(getContext());
-        MatrixCursor c =
-                new MatrixCursor(new String[] {OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE});
-        c.addRow(new Object[] {u.getLastPathSegment(), f.length()});
-        return c;
+    @Override
+    public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+        if (!"r".equals(mode)) throw new FileNotFoundException("Reports are read-only");
+        return ParcelFileDescriptor.open(report(uri), ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
-    public Uri insert(Uri u, ContentValues v) {
+    @Override
+    public Cursor query(
+            Uri uri, String[] projection, String selection, String[] args, String sort) {
+        String[] columns = DiagnosticStore.columns(projection);
+        MatrixCursor cursor = new MatrixCursor(columns);
+        try {
+            File file = report(uri);
+            Object[] row = new Object[columns.length];
+            for (int i = 0; i < columns.length; i++)
+                row[i] =
+                        OpenableColumns.DISPLAY_NAME.equals(columns[i])
+                                ? file.getName()
+                                : file.length();
+            cursor.addRow(row);
+        } catch (FileNotFoundException unavailable) {
+            /* Unknown reports have no rows. */
+        }
+        return cursor;
+    }
+
+    @Override
+    public Uri insert(Uri uri, ContentValues values) {
         throw new UnsupportedOperationException();
     }
 
-    public int delete(Uri u, String s, String[] a) {
+    @Override
+    public int delete(Uri uri, String selection, String[] args) {
         throw new UnsupportedOperationException();
     }
 
-    public int update(Uri u, ContentValues v, String s, String[] a) {
+    @Override
+    public int update(Uri uri, ContentValues values, String selection, String[] args) {
         throw new UnsupportedOperationException();
     }
 }

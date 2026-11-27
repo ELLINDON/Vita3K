@@ -1,0 +1,9 @@
+{
+  "official_base": "3c2ae20",
+  "version": "0.6.0-local.3",
+  "versionCode": 1002,
+  "apk_sha256": "6c4c546644536ac3629d0b4ca8a9fd91521b24717b44ed0c907a6c91b019f5df",
+  "device_feedback": "Mi Pad 5; Turnip; 3D 0.75x; general 1x; target 45 FPS; recording supplied",
+  "game_modules_in_apk": false,
+  "crash_recovery_guard_active": false
+}

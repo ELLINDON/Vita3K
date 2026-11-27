@@ -110,6 +110,12 @@ public class GameActivity extends SDLActivity implements InputManager.InputDevic
     }
 
     /** The frontend's settings menu opened or closed (game-frontend/android.cpp). */
+    public void onMenuAction(String action) { runOnUiThread(() -> {
+        if ("controls".equals(action)) startActivity(new Intent(this, ControlsEditorActivity.class));
+        else if ("driver".equals(action)) DriverImport.pick(this);
+        else if ("diagnostic".equals(action)) ImportDiagnostics.share(this);
+    }); }
+
     public void onSettingsMenu(boolean open) {
         runOnUiThread(() -> {
             if (controls != null)

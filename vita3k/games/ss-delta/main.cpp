@@ -24,6 +24,10 @@
 #include "allies.h"
 #include "dlc.h"
 #include "saves.h"
+#include "frame_pacing.h"
+#include "native_resolution.h"
+#include <cstdlib>
+#include <cstddef>
 
 #include <config/state.h>
 #include <cpu/aot.h>
@@ -156,16 +160,17 @@ game_frontend::IniLayout ini_layout() {
     const std::string id = "ss-delta", exe = id + game_frontend::executable_suffix;
     IniSection display{ "display", "",
         {
-            { "full_3d", Kind::Bool, "true", 0, 0, {},
-                "Draw the 3D at 960x544 like the menus and HUD (the game's own ResoDown 0). Off: 720x408,\n"
-                "upscaled, as on the Vita." },
+            { "full_3d", Kind::Choice, "true", 0, 0, { "half", "false", "true" },
+                "Resolucao interna do 3D: 0.5x 480x272, 0.75x 720x408 ou 1x 960x544.\n"
+                "HUD e menus mantem 960x544 na escala geral 1x. Reinicie o jogo para aplicar." },
             layout::scale(),
             layout::window_scale(),
             layout::fullscreen(id, exe),
             layout::vsync(),
-            { "frame_rate", Kind::Choice, "60", 0, 0, { "30", "60" },
-                "The game's frame rate: 60, or 30 as on the Vita. The game keeps its speed at 60. Loading\n"
-                "screens run at 30 only with a game built before ss-delta 0.5.0 (build it again)." },
+            { "frame_rate", Kind::Choice, "60", 0, 0, { "24", "30", "40", "45", "60" },
+                "Target frame rate: 24, 30, 40, 45 or 60. Game speed uses measured frame time.\n"
+                "60 is experimental; lower rates were tested by the owner. Cadence depends on device/vblank.\n"
+                "Loading screens fall back to 30 only with a build lacking the loading-race fix." },
             layout::filter(),
             layout::fps_counter(),
             // off: no visible change on the shimmering ST17 ground (the owner, 2026-10-14), so its cause
@@ -174,10 +179,15 @@ game_frontend::IniLayout ini_layout() {
         } };
     // the settings menu changes the frame rate while the game runs: on_tick reads it every tick
     for (auto &spec : display.settings) {
-        if (spec.key == "frame_rate")
+        if (spec.key == "frame_rate") {
             spec.live = true;
-        if (spec.key == "full_3d")
-            spec.title = "Full-resolution 3D";
+            spec.choice_labels = { "24", "30", "40", "45", "60 (experimental)" };
+        }
+        if (spec.key == "full_3d") {
+            spec.title = "Resolucao do 3D";
+            spec.choice_labels = { "0.5x (480x272)", "0.75x (720x408)", "1x (960x544)" };
+        }
+        if (spec.key == "scale")spec.title="Escala geral";
     }
     IniSection game{ "game", "",
         { { "dlc", Kind::Bool, "true", 0, 0, {},
@@ -366,23 +376,13 @@ void override_boot_config(EmuEnvState &emuenv, const std::string &title_id, cons
 // Depth of field and haze then use the depth beside each pixel (bones in the hub blurred). Both
 // values are in the shaders' literal table, a list of {u32 register, f32 value}, as consecutive
 // entries; they are set to 1.0 there.
-void unscale_depth_uvs(SceGxmProgram &program) {
-    constexpr uint32_t x_scale = 0x3f7a6f4e; // 720 / 736
-    constexpr uint32_t y_scale = 0x3f7b13b2; // 408 / 416
-    constexpr uint32_t one = 0x3f800000;
-    uint8_t *const bytes = reinterpret_cast<uint8_t *>(&program);
-    int replaced = 0;
-    for (uint32_t i = 0; i + 12 <= program.size; i += 4) {
-        uint32_t x, y;
-        std::memcpy(&x, bytes + i, 4);
-        std::memcpy(&y, bytes + i + 8, 4);
-        if (x == x_scale && y == y_scale) {
-            std::memcpy(bytes + i, &one, 4);
-            std::memcpy(bytes + i + 8, &one, 4);
-            replaced++;
-        }
-    }
-    LOG_INFO_IF(replaced, "full_3d: depth UV scale set to 1.0 in a {} shader", program.is_vertex() ? "vertex" : "fragment");
+void scale_depth_uvs(SceGxmProgram &program, ss_delta::native_resolution::Mode mode) {
+    const size_t field=offsetof(SceGxmProgram,literals_offset);
+    if(program.size<field+sizeof(program.literals_offset))return;
+    const size_t table=field+static_cast<size_t>(program.literals_offset);
+    const size_t replaced=ss_delta::native_resolution::patch_literals(
+        reinterpret_cast<uint8_t*>(&program),program.size,table,program.literals_count,mode);
+    LOG_INFO_IF(replaced,"3D resolution: depth UVs set to {}/{} in a {} shader",mode.uv_x(),mode.uv_y(),program.is_vertex()?"vertex":"fragment");
 }
 
 // The frame rate (docs/03-plan.md, 60 fps): the game paces its main loop with a frame timer
@@ -408,6 +408,7 @@ static uint64_t frame_period_us(int fps) {
 
 // Called every frame; returns the rate it set (0: not yet).
 int update_frame_rate(EmuEnvState &emuenv, int fps, int current) {
+    if(!ss_delta::frame_pacing::supported(fps))return -1;
     auto &mem = emuenv.mem;
     const auto u32 = [&](Address a) -> uint32_t * { return is_valid_addr(mem, a) ? Ptr<uint32_t>(a).get(mem) : nullptr; };
     uint32_t *const holder = u32(0x81c957cc);
@@ -430,14 +431,14 @@ int update_frame_rate(EmuEnvState &emuenv, int fps, int current) {
         LOG_INFO("frame_rate: loading screens {}", loading_fixed ? "at the set rate (the recompiled eboot has the fix)" : "at 30 fps (an eboot without the loading-screen fix)");
     }
     const int want = loading && !loading_fixed ? 30 : fps;
-    if (want == current && *period == frame_period_us(want))
+    if (want == current && *period == frame_period_us(want) && *flip == ss_delta::frame_pacing::flip_interval(want))
         return current;
-    if ((*period != frame_period_us(30) && *period != frame_period_us(fps)) || (*flip != 2 && *flip != 60u / fps)) {
+    if (!ss_delta::frame_pacing::known_period(*period) || (*flip != 2 && *flip != 1)) {
         LOG_WARN("frame_rate: unexpected frame timer {} us / flip threshold {}; left alone", *period, *flip);
         return -1;
     }
     *period = frame_period_us(want);
-    *flip = 60 / want;
+    *flip = ss_delta::frame_pacing::flip_interval(want);
     LOG_INFO("frame_rate: {} fps{} (loading state {}, frame timer {} us, flip every {} vblank)", want, want != fps ? " for a loading screen" : "", state, *period, *flip);
     return want;
 }
@@ -1093,17 +1094,26 @@ int main(int argc, char *argv[]) {
                 LOG_WARN("Add-ons: not unlocked, the installed game lacks them ({})", why);
         }
         // the game's own engine settings that ss-delta.ini changes
-        const bool full_3d = values.get_bool("display.full_3d");
-        std::map<std::string, std::string> boot_config{ { "ResoDown", full_3d ? "0" : "1" } };
+        const int requested_mode=ss_delta::native_resolution::setting_mode(values.get("display.full_3d"));
+        std::map<std::string, std::string> boot_config{ { "ResoDown", std::to_string(requested_mode) } };
         for (const auto &[key, value] : values.section("boot_config"))
             boot_config[key] = value;
         override_boot_config(emuenv, profile.title_id, ctx.data_dir / "game", boot_config);
-        if (full_3d)
-            emuenv.gxm.on_program_registered = unscale_depth_uvs;
+        // Respect an explicit boot_config override and derive UV padding from the effective mode.
+        char *end=nullptr;const std::string &configured=boot_config.at("ResoDown");
+        const long number=std::strtol(configured.c_str(),&end,10);
+        if(end!=configured.c_str()&&*end=='\0'&&number>=0&&number<=2147483647L){
+            const auto mode=ss_delta::native_resolution::mode_for(static_cast<int>(number));
+            emuenv.gxm.on_program_registered=[mode](SceGxmProgram &program){scale_depth_uvs(program,mode);};
+            LOG_INFO("3D resolution: mode {} -> {}x{}; depth padded {}x{}; UV {}/{}; HUD 960x544; global scale {}",number,mode.width,mode.height,mode.padded_width(),mode.padded_height(),mode.uv_x(),mode.uv_y(),settings.scale);
+        } else {
+            emuenv.gxm.on_program_registered=nullptr;
+            LOG_WARN("3D resolution: unrecognized ResoDown {}; depth literals left unchanged",configured);
+        }
     };
     hooks.on_tick = [&](game_frontend::Context &ctx) {
         const int fps = ctx.settings->values.get_int("display.frame_rate");
-        if (fps != 30 && frame_rate != -1)
+        if (ss_delta::frame_pacing::supported(fps) && frame_rate != -1)
             frame_rate = update_frame_rate(*ctx.emuenv, fps, frame_rate);
         if (ctx.settings->values.get_bool("game.skip_intro"))
             intro_skipped = skip_intro_logos(*ctx.emuenv, intro_skipped);

@@ -1,93 +1,38 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- A game's APK on the single-game frontend (ss-delta 09-android) -->
+<?xml version='1.0' encoding='utf-8'?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-	<uses-feature android:glEsVersion="0x00030000" />
-	<uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
-	<uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-	<uses-feature android:name="android.hardware.gamepad" android:required="false" />
-	<uses-feature android:name="android.hardware.bluetooth" android:required="false" />
-	<uses-feature android:name="android.hardware.usb.host" android:required="false" />
-
-	<!-- Ad Hoc Play: UDP on the local network, and Wi-Fi broadcasts -->
-	<uses-permission android:name="android.permission.INTERNET" />
-	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-	<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-	<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-	<!-- SDL: rumble, and the screen kept on while playing -->
-	<uses-permission android:name="android.permission.VIBRATE" />
-	<uses-permission android:name="android.permission.WAKE_LOCK" />
-	<!-- the setup on the device (BuildService): the build goes on while the player leaves the app -->
-	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-	<application
-		android:label="@string/app_name"
-		android:allowBackup="false"
-		android:extractNativeLibs="true"
-		android:hardwareAccelerated="true"
-		android:appCategory="game"
-		android:isGame="true"
-		android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
-
-		<!-- the launcher's entry: offers a Turnip driver where it is needed, then starts the game -->
-		<activity
-			android:name="io.github.vitarecomps.frontend.SetupActivity"
-			android:exported="true"
-			android:screenOrientation="sensorLandscape"
-			android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
-			<intent-filter>
-				<action android:name="android.intent.action.MAIN" />
-				<category android:name="android.intent.category.LAUNCHER" />
-			</intent-filter>
-		</activity>
-
-		<!-- the game (started by SetupActivity; test tools start it directly) -->
-		<activity
-			android:name="io.github.vitarecomps.frontend.GameActivity"
-			android:exported="true"
-			android:launchMode="singleTask"
-			android:screenOrientation="sensorLandscape"
-			android:resizeableActivity="false"
-			android:preferMinimalPostProcessing="true"
-			android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
-			<!-- the game's native library (lib<game>.so), which GameActivity names to SDL -->
-			<meta-data android:name="game.library" android:value="${gameLibrary}" />
-		</activity>
-
-		<!-- the game's setup on the device (BuildActivity, BuildService), when the APK has the build tools -->
-		<activity
-			android:name="io.github.vitarecomps.frontend.BuildActivity"
-			android:exported="false"
-			android:launchMode="singleTop"
-			android:screenOrientation="sensorLandscape"
-			android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
-			android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
-		<service
-			android:name="io.github.vitarecomps.frontend.BuildService"
-			android:exported="false"
-			android:foregroundServiceType="dataSync" />
-
-		<!-- "Import a Vita save" (the launcher's long-press menu): a picked save, through the game's
-		     import-save option, run as a front-end step -->
-		<activity
-			android:name="io.github.vitarecomps.frontend.SaveImportActivity"
-			android:exported="false"
-			android:screenOrientation="sensorLandscape"
-			android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
-			android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
-
-		<!-- the front end's setup steps (install the firmware and the game, dump the modules), each in a
-		     process of its own that ends with it (FrontendStepActivity) -->
-		<activity
-			android:name="io.github.vitarecomps.frontend.FrontendStepActivity"
-			android:exported="false"
-			android:process=":frontend_step"
-			android:screenOrientation="sensorLandscape"
-			android:resizeableActivity="false"
-			android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
-			<meta-data android:name="game.library" android:value="${gameLibrary}" />
-		</activity>
-	</application>
+    <uses-feature android:glEsVersion="0x00030000" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application android:label="@string/app_name" android:allowBackup="false" android:extractNativeLibs="true" android:hardwareAccelerated="true" android:appCategory="game" android:isGame="true" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <activity android:name="io.github.vitarecomps.frontend.SetupActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name="io.github.vitarecomps.frontend.GameActivity" android:exported="true" android:launchMode="singleTask" android:screenOrientation="sensorLandscape" android:resizeableActivity="false" android:preferMinimalPostProcessing="true" android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
+            <meta-data android:name="game.library" android:value="${gameLibrary}" />
+        </activity>
+        <activity android:name="io.github.vitarecomps.frontend.BuildActivity" android:exported="false" android:launchMode="singleTop" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar" android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
+        <service android:name="io.github.vitarecomps.frontend.BuildService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <activity android:name="io.github.vitarecomps.frontend.SaveImportActivity" android:exported="false" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar" android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
+        <activity android:name="io.github.vitarecomps.frontend.FrontendStepActivity" android:exported="false" android:process=":frontend_step" android:screenOrientation="sensorLandscape" android:resizeableActivity="false" android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen">
+            <meta-data android:name="game.library" android:value="${gameLibrary}" />
+        </activity>
+        <activity android:exported="false" android:name="io.github.vitarecomps.frontend.ControlsEditorActivity" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
+        <activity android:exported="false" android:name="io.github.vitarecomps.frontend.DriverPickerActivity" android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
+        <provider android:authorities="${applicationId}.importdiag" android:exported="false" android:grantUriPermissions="true" android:name="io.github.vitarecomps.frontend.DiagnosticProvider" />
+    </application>
 </manifest>

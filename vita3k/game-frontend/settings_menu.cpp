@@ -311,6 +311,7 @@ SettingsMenu::SettingsMenu(const IniLayout &layout, const Values &values, const 
             row.spec.help = help; row.spec.live = true; row.editable = true;
             page.rows.push_back(std::move(row));
         };
+        if (section.name == "debug") action("driver", "Import driver ZIP", "Store a driver package; select it and restart to apply.");
         if (section.name == "debug") {
             action("diagnostic", "Share diagnostic report", "Share existing setup/runtime logs with device and application details.");
         }
